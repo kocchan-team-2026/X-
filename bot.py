@@ -251,7 +251,7 @@ GALLERY_URL = f"http://localhost:{PORT}"
 
 def page() -> str:
     html = (Path(__file__).parent / "ui.html").read_text(encoding="utf-8")
-    html = html.replace("__BN__", "(エンタメ)" if ENT else "")
+    html = html.replace("__BN__", "(エンタメ)" if ENT else "").replace("__ENT__", "true" if ENT else "false")
     pn = os.environ.get("GALLERY_PORT", "8765")
     pe = os.environ.get("GALLERY_PORT_ENT", "8766")
     cur = 'aria-current="page"'
@@ -299,9 +299,14 @@ def list_items():
             continue
         w = works.setdefault(f.stem, {"work_id": f.stem, "latest": "", "posts": []})
         w["urls"] = urls
+        try:
+            w["affiliate"] = json.loads(f.read_text(encoding="utf-8")).get("affiliate", "")
+        except Exception:  # noqa: BLE001
+            pass
         w["latest"] = max(w["latest"], datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y%m%d_%H%M%S"))
     for w in works.values():
         w.setdefault("urls", [])
+        w.setdefault("affiliate", "")
         times = [p["saved_at"] for p in w["posts"]] + [u.get("added_at", "") for u in w["urls"]]
         times = [t for t in times if t]
         w["created_at"], w["updated_at"] = (min(times), max(times)) if times else ("", "")
@@ -783,6 +788,56 @@ async def start_web():
             raise web.HTTPNotFound()
         return web.json_response(st)
 
+    async def api_affiliate(req):
+        """作品のアフィリエイトリンク(MyFansで手動作成したURL)を保存。空文字で消去"""
+        if ENT:
+            raise web.HTTPNotFound()
+        b = await req.json()
+        wid = str(b.get("work_id", ""))
+        url = str(b.get("url", "")).strip()
+        if not wid or "/" in wid or wid.startswith("."):
+            raise web.HTTPBadRequest(text="invalid work_id")
+        if url and (not re.match(r"^https?://\S+$", url) or len(url) > 2000):
+            raise web.HTTPBadRequest(text="http(s)://から始まるURLを入れてください")
+        exists = any(
+            json.loads(m.read_text(encoding="utf-8")).get("work_id") == wid for m in SAVE_DIR.glob("*/meta.json"))
+        f = WORKS_DIR / f"{wid}.json"
+        if not exists and not f.exists():
+            raise web.HTTPNotFound()
+        WORKS_DIR.mkdir(parents=True, exist_ok=True)
+        data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"urls": []}
+        data["affiliate"] = url
+        data["affiliate_at"] = datetime.now().isoformat(timespec="seconds") if url else ""
+        f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return web.json_response({"affiliate": url})
+
+    async def api_delete_work(req):
+        """作品を削除。完全には消さず、saved/_trash/ に移す(戻せるように)"""
+        b = await req.json()
+        wid = str(b.get("work_id", ""))
+        if not wid or "/" in wid or wid.startswith(".") or wid.startswith("_"):
+            raise web.HTTPBadRequest(text="invalid work_id")
+        mine = []
+        for d in SAVE_DIR.glob("*"):
+            if not d.is_dir() or d.name.startswith("_"):
+                continue
+            try:
+                meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                meta = {}
+            if (meta.get("work_id") or d.name) == wid:
+                mine.append(d)
+        wf = WORKS_DIR / f"{wid}.json"
+        if not mine and not wf.exists():
+            raise web.HTTPNotFound()
+        dest = SAVE_DIR / "_trash" / f"{datetime.now():%Y%m%d_%H%M%S}_{wid}"
+        dest.mkdir(parents=True, exist_ok=True)
+        for d in mine:
+            shutil.move(str(d), str(dest / d.name))
+        if wf.exists():
+            shutil.move(str(wf), str(dest / "_work.json"))
+        return web.json_response({"ok": True, "moved": len(mine)})
+
     async def api_bulk(req):
         b = await req.json()
         try:
@@ -898,7 +953,7 @@ async def start_web():
         web.get("/thumb/{id}/{name}", thumb), web.get("/api/history/{work}", api_history),
         web.post("/api/edit", api_edit), web.get("/edited/{id}/{name}", edited_file),
         web.get("/api/profiles", api_profiles), web.post("/api/rewrite", api_rewrite),
-        web.post("/api/post", api_post), web.post("/api/bulk", api_bulk), web.post("/api/shadowban", api_sb_start), web.get("/api/shadowban/{job}", api_sb_status), web.post("/api/imp_alert", api_imp_alert), web.get("/api/bulk/{job}", api_bulk_status), web.post("/api/move", api_move), web.get("/api/schedule", api_sched_list),
+        web.post("/api/post", api_post), web.post("/api/bulk", api_bulk), web.post("/api/delete_work", api_delete_work), web.post("/api/affiliate", api_affiliate), web.post("/api/shadowban", api_sb_start), web.get("/api/shadowban/{job}", api_sb_status), web.post("/api/imp_alert", api_imp_alert), web.get("/api/bulk/{job}", api_bulk_status), web.post("/api/move", api_move), web.get("/api/schedule", api_sched_list),
         web.post("/api/schedule", api_sched_add), web.delete("/api/schedule/{sid}", api_sched_del), web.get("/api/job/{job}", api_job),
     ])
     runner = web.AppRunner(app)
