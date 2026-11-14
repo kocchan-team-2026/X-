@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>X保存ボード</title>
+<style>
+:root{
+  --bg:#0f1115; --surface:#171a21; --surface2:#1f232c; --border:#2e3440;
+  --text:#eceff4; --muted:#a3acba; --accent:#2f6fed; --accent-hover:#4a82f2;
+  --ok:#3ecf8e; --warn:#f5b84b; --err:#ff7b7b; --danger:#d9344f;
+  --radius:12px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,"Hiragino Sans",sans-serif}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid #7fb0ff;outline-offset:2px}
+[hidden]{display:none!important}
+
+/* ---- ヘッダー ---- */
+.top{position:sticky;top:0;z-index:20;background:rgba(15,17,21,.94);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);
+  display:flex;flex-wrap:wrap;gap:12px 16px;align-items:center;padding:12px 24px}
+.top h1{font-size:17px;margin:0;font-weight:700;letter-spacing:.02em}
+.search{flex:1;min-width:220px;max-width:420px;background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  color:var(--text);padding:8px 12px;font:inherit}
+.search::placeholder{color:var(--muted)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{background:transparent;border:1px solid var(--border);border-radius:999px;padding:4px 12px;color:var(--muted)}
+.chip:hover{border-color:#4a5163;color:var(--text)}
+.chip[aria-pressed=true]{background:#24335a;border-color:#4a82f2;color:#fff}
+.count{color:var(--muted);margin-left:auto}
+
+/* ---- 一覧 ---- */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:20px;padding:24px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;cursor:pointer;
+  text-align:left;padding:0;display:flex;flex-direction:column;transition:border-color .15s,transform .15s}
+.card:hover{border-color:#4a5163;transform:translateY(-2px)}
+.thumb{position:relative;aspect-ratio:4/3;background:#0a0b0e}
+.thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.thumb .none{display:grid;place-items:center;height:100%;color:var(--muted);font-size:13px}
+.overlay{position:absolute;left:8px;bottom:8px;display:flex;gap:6px}
+.pill{background:rgba(10,11,14,.82);border-radius:6px;padding:1px 8px;font-size:12px;color:#fff}
+.card .body{padding:12px 14px 14px;display:flex;flex-direction:column;gap:6px;flex:1}
+.card .author{font-weight:600;font-size:13px;color:var(--muted)}
+.card .excerpt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:44px}
+.card .foot{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:auto;color:var(--muted);font-size:12px}
+.site{border-radius:4px;padding:0 6px;font-size:12px;font-weight:600;color:#fff}
+.site.MyFans{background:#c2185b}.site.FANZA{background:#8e3dd1}
+.empty{grid-column:1/-1;text-align:center;color:var(--muted);padding:80px 0}
+
+/* ---- 詳細ドロワー ---- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:30}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(640px,100vw);background:var(--surface);border-left:1px solid var(--border);
+  z-index:31;display:flex;flex-direction:column}
+.drawer header,.sheet header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border)}
+.drawer header h2,.sheet header h2{font-size:16px;margin:0;flex:1}
+.iconbtn{background:transparent;border:1px solid var(--border);border-radius:8px;width:34px;height:34px;display:grid;place-items:center}
+.iconbtn:hover{background:var(--surface2)}
+.drawer .scroll{overflow:auto;padding:20px;flex:1;display:flex;flex-direction:column;gap:24px}
+.drawer footer{padding:14px 20px;border-top:1px solid var(--border)}
+.sec h3{font-size:12px;letter-spacing:.08em;color:var(--muted);margin:0 0 10px;font-weight:600}
+.urlrow{display:flex;gap:10px;align-items:center;background:var(--surface2);border-radius:10px;padding:8px 10px;margin-bottom:8px}
+.urlrow a{color:#8ecdf8;word-break:break-all;flex:1;font-size:13px}
+.post{background:var(--surface2);border-radius:var(--radius);padding:14px;margin-bottom:14px}
+.post .meta{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline;margin-bottom:8px}
+.post .meta b{font-size:13px}.post .meta span{color:var(--muted);font-size:12px}
+.post .text{white-space:pre-wrap;margin-bottom:10px}
+.post video,.post img.full{width:100%;max-height:380px;object-fit:contain;background:#000;border-radius:8px;display:block}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.hist{border-left:2px solid var(--border);padding:2px 0 2px 12px;margin-bottom:10px;font-size:13px}
+.hist .t{color:var(--muted);font-size:12px}
+
+/* ---- ボタン ---- */
+.btn{background:var(--surface2);border:1px solid var(--border);border-radius:9px;padding:8px 14px}
+.btn:hover:not(:disabled){background:#272c37}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.btn.primary:hover:not(:disabled){background:var(--accent-hover)}
+.btn.block{width:100%;padding:12px;font-size:15px}
+.btn.go{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:700}
+.btn.go:hover:not(:disabled){background:#e64a63}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.sm{padding:4px 10px;font-size:12px}
+
+/* ---- 投稿シート ---- */
+.modal{position:fixed;inset:0;z-index:40;display:grid;place-items:center;background:rgba(0,0,0,.6);padding:16px}
+.sheet{background:var(--surface);border:1px solid var(--border);border-radius:16px;width:min(760px,100%);max-height:calc(100vh - 32px);
+  display:flex;flex-direction:column;overflow:hidden}
+.steps{display:flex;border-bottom:1px solid var(--border)}
+.steps button{flex:1;background:transparent;border:0;border-bottom:3px solid transparent;padding:12px 6px;color:var(--muted);display:flex;
+  gap:8px;align-items:center;justify-content:center}
+.steps button .n{width:22px;height:22px;border-radius:50%;border:1px solid var(--border);display:grid;place-items:center;font-size:12px}
+.steps button[aria-current=step]{color:var(--text);border-bottom-color:var(--accent)}
+.steps button[aria-current=step] .n{background:var(--accent);border-color:var(--accent);color:#fff}
+.steps button.done .n{background:#1f3d31;border-color:var(--ok);color:var(--ok)}
+.sheet .content{padding:20px;overflow:auto;flex:1}
+.sheet footer{display:flex;gap:10px;justify-content:space-between;padding:14px 20px;border-top:1px solid var(--border)}
+.field{margin-bottom:16px}
+.field label.l{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600}
+textarea,select,input[type=text],.num{width:100%;background:#0f1115;border:1px solid var(--border);border-radius:10px;color:var(--text);padding:10px 12px;font:inherit}
+textarea{min-height:170px;resize:vertical;line-height:1.7}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.status{display:inline-flex;align-items:center;gap:6px;font-size:12px;border-radius:999px;padding:2px 10px;border:1px solid var(--border);color:var(--muted)}
+.status.ok{color:var(--ok);border-color:#256b4d}.status.busy{color:var(--warn);border-color:#6b5320}.status.err{color:var(--err);border-color:#7a3333}
+.spin{width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.accs{max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:10px}
+.accs .grp{position:sticky;top:0;background:var(--surface2);font-size:12px;color:var(--muted);padding:4px 12px;font-weight:600}
+.acc{display:flex;gap:10px;align-items:center;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--border);padding:10px 12px}
+.acc:hover{background:var(--surface2)}
+.acc[aria-checked=true]{background:#1b2a4d}
+.acc .mark{width:18px;height:18px;border-radius:50%;border:2px solid var(--muted);flex:none}
+.acc[aria-checked=true] .mark{border-color:#7fb0ff;background:radial-gradient(#7fb0ff 45%,transparent 50%)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.tile{position:relative;border:2px solid var(--border);border-radius:10px;overflow:hidden;background:#000;padding:0;text-align:left}
+.tile img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block}
+.tile .lab{display:block;padding:4px 8px;font-size:12px;background:var(--surface2);color:var(--muted)}
+.tile[aria-pressed=true]{border-color:#7fb0ff}
+.tile[aria-pressed=true]::after{content:"✓ 選択中";position:absolute;top:6px;left:6px;background:#2f6fed;color:#fff;font-size:12px;border-radius:6px;padding:0 8px}
+details{background:var(--surface2);border-radius:10px;padding:10px 14px}
+details summary{cursor:pointer;color:var(--muted)}
+.rng{display:grid;grid-template-columns:130px 1fr 1fr;gap:8px 10px;align-items:center;margin-top:10px}
+.rng .num{padding:6px 8px}
+.cand{display:block;width:100%;text-align:left;background:var(--surface2);border:2px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;white-space:pre-wrap}.cand:hover{border-color:#4a5163}.cand[aria-pressed=true]{border-color:#7fb0ff}.cand b{color:var(--muted);margin-right:6px}
+.preview{border:1px solid var(--border);border-radius:14px;padding:14px;background:#0f1115}
+.preview .who{display:flex;gap:10px;align-items:center;margin-bottom:8px}
+.avatar{width:38px;height:38px;border-radius:50%;background:#2f3a55;display:grid;place-items:center;font-weight:700}
+.preview .tx{white-space:pre-wrap;margin-bottom:10px}
+.preview video,.preview img{width:100%;border-radius:12px;max-height:320px;object-fit:contain;background:#000;display:block;margin-top:6px}
+.checks{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:6px}
+.checks li::before{content:"✓ ";color:var(--ok);font-weight:700}
+.checks li.ng::before{content:"! ";color:var(--warn)}
+.note{color:var(--muted);font-size:12px;margin-top:6px}
+.result{text-align:center;padding:30px 10px}
+.result h3{font-size:18px;margin:8px 0}
+
+/* ---- トースト ---- */
+#toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:60;display:grid;gap:8px}
+.toast{background:#252a35;border:1px solid var(--border);border-radius:10px;padding:10px 16px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.toast.err{border-color:#7a3333;color:#ffb4b4}
+@media (max-width:640px){.top{padding:10px 14px}.grid{padding:14px;grid-template-columns:1fr}.rng{grid-template-columns:100px 1fr 1fr}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>X保存ボード</h1>
+  <input id="q" class="search" type="search" placeholder="本文・投稿者・URLで検索" aria-label="検索">
+  <div class="chips" id="chips" role="group" aria-label="絞り込み"></div>
+  <span class="count" id="count"></span>
+</header>
+<main class="grid" id="grid"></main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-label="作品の詳細" hidden></aside>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="投稿を作成" hidden></div>
+<div id="toast" aria-live="polite"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=t=>t?t.replace('T',' ').slice(0,16).replace(/-/g,'/'):'不明';
+async function api(path,opt){const r=await fetch(path,opt);if(!r.ok)throw new Error((await r.text())||('HTTP '+r.status));return r.json();}
+function toast(msg,err){const d=document.createElement('div');d.className='toast'+(err?' err':'');d.textContent=msg;$('#toast').append(d);setTimeout(()=>d.remove(),2600);}
+async function copyTo(url,label){try{const r=await fetch(url,{method:'POST'});if(!r.ok)throw 0;toast(label+'をコピーしました ✓');}catch{toast(label+'のコピーに失敗しました',true);}}
+
+/* ================= 一覧 ================= */
+let works=[], filter='all', query='', openId=null, openSig='';
+const FILTERS=[['all','すべて'],['video','動画あり'],['MyFans','MyFans'],['FANZA','FANZA'],['nourl','作品URLなし']];
+function drawChips(){$('#chips').innerHTML=FILTERS.map(([k,l])=>`<button class="chip" data-f="${k}" aria-pressed="${filter===k}">${l}</button>`).join('');}
+$('#chips').addEventListener('click',e=>{const b=e.target.closest('.chip');if(!b)return;filter=b.dataset.f;drawChips();render();});
+$('#q').addEventListener('input',e=>{query=e.target.value.trim().toLowerCase();render();});
+
+const thumbOf=w=>{for(const p of w.posts){if(p.videos[0])return `/thumb/${p.id}/${p.videos[0]}`;if(p.images[0])return `/files/${p.id}/${p.images[0]}`;}return null;};
+const countVideos=w=>w.posts.reduce((n,p)=>n+p.videos.length,0);
+function matches(w){
+  if(filter==='video'&&!countVideos(w))return false;
+  if(filter==='nourl'&&w.urls.length)return false;
+  if((filter==='MyFans'||filter==='FANZA')&&!w.urls.some(u=>u.site===filter))return false;
+  if(!query)return true;
+  const hay=[...w.posts.map(p=>p.author+' '+p.text),...w.urls.map(u=>u.url)].join(' ').toLowerCase();
+  return hay.includes(query);
+}
+function render(){
+  const list=works.filter(matches);
+  $('#count').textContent=`${list.length} / ${works.length} 作品`;
+  $('#grid').innerHTML=list.length?list.map(w=>{
+    const t=thumbOf(w),p=w.posts[0]||{},nv=countVideos(w);
+    return `<button class="card" data-w="${esc(w.work_id)}">
+      <div class="thumb">${t?`<img src="${t}" loading="lazy" alt="">`:'<div class="none">メディアなし</div>'}
+        <div class="overlay">${nv?`<span class="pill">▶ 動画${nv}</span>`:''}<span class="pill">投稿${w.posts.length}</span></div></div>
+      <div class="body"><div class="author">${esc(p.author||'(投稿なし)')}</div>
+        <div class="excerpt">${esc(p.text||'')}</div>
+        <div class="foot">${[...new Set(w.urls.map(u=>u.site))].map(s=>`<span class="site ${s}">${s}</span>`).join('')}
+          <span>更新 ${fmt(w.updated_at)}</span></div></div></button>`;}).join('')
+    :`<div class="empty">${works.length?'条件に合う作品がありません':'まだ保存された作品がありません。Discord に X のリンクを送ってください。'}</div>`;
+}
+$('#grid').addEventListener('click',e=>{const c=e.target.closest('.card');if(c)openDrawer(c.dataset.w);});
+const sig=w=>w?w.updated_at+'|'+w.posts.length+'|'+w.urls.length:'';
+async function load(){
+  try{works=await api('/api/items');}catch{return;}
+  render();
+  const w=works.find(x=>x.work_id===openId);
+  if(openId&&$('#modal').hidden&&sig(w)!==openSig)drawDrawer(w);
+}
+setInterval(()=>{if($('#modal').hidden)load();},10000);
+
+/* ================= 詳細ドロワー ================= */
+let PROFILES=null;
+async function profiles(){if(!PROFILES)PROFILES=await api('/api/profiles');return PROFILES;}
+function openDrawer(id){openId=id;$('#scrim').hidden=false;$('#drawer').hidden=false;drawDrawer(works.find(w=>w.work_id===id));}
+function closeDrawer(){openId=null;$('#scrim').hidden=true;$('#drawer').hidden=true;$('#drawer').innerHTML='';}
+$('#scrim').addEventListener('click',()=>{if($('#modal').hidden)closeDrawer();});
+async function drawDrawer(w){
+  if(!w){closeDrawer();return;}
+  openSig=sig(w);
+  const d=$('#drawer');
+  d.innerHTML=`<header><h2>作品の詳細</h2><span class="note" style="margin:0">作成 ${fmt(w.created_at)} ・ 更新 ${fmt(w.updated_at)}</span>
+      <button class="iconbtn" id="dclose" aria-label="閉じる">✕</button></header>
+    <div class="scroll">
+      <section class="sec"><h3>作品URL</h3>${w.urls.length?w.urls.map(u=>`<div class="urlrow"><span class="site ${u.site}">${u.site}</span>
+        <a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a>
+        <button class="btn sm" data-copyurl="${esc(u.url)}">コピー</button><span class="note" style="margin:0">${fmt(u.added_at)}</span></div>`).join('')
+        :'<div class="note">スレッドに MyFans / FANZA の URL を送ると、ここに表示されます。</div>'}</section>
+      <section class="sec"><h3>保存した投稿(${w.posts.length}件)</h3>${w.posts.map(p=>`<div class="post">
+        <div class="meta"><b>${esc(p.author)}</b><span>🕒 保存 ${fmt(p.saved_at)}</span><a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:#8ecdf8;font-size:12px">元の投稿</a></div>
+        <div class="text">${esc(p.text)}</div>
+        ${p.videos.map(v=>`<video src="/files/${p.id}/${v}" controls preload="metadata"></video>
+          <div class="actions"><button class="btn sm" data-copy="/copy/${p.id}/${v}" data-label="動画">🎬 動画をコピー</button></div>`).join('')}
+        ${p.images.map(m=>`<img class="full" src="/files/${p.id}/${m}" loading="lazy" alt="">
+          <div class="actions"><button class="btn sm" data-copy="/copy/${p.id}/${m}" data-label="画像">🖼 画像をコピー</button></div>`).join('')}
+        <div class="actions"><button class="btn sm" data-copy="/copytext/${p.id}" data-label="本文">📝 本文をコピー</button></div></div>`).join('')}</section>
+      <section class="sec"><h3>投稿履歴</h3><div id="hist" class="note">読み込み中…</div></section>
+    </div>
+    <footer><button class="btn primary block" id="dpost">📤 この作品を X に投稿する</button></footer>`;
+  $('#dclose').onclick=closeDrawer;
+  $('#dpost').onclick=()=>openPost(w);
+  d.onclick=e=>{const b=e.target.closest('button');if(!b)return;
+    if(b.dataset.copy)copyTo(b.dataset.copy,b.dataset.label);
+    if(b.dataset.copyurl)copyTo(`/copyurl/${w.work_id}/${encodeURIComponent(b.dataset.copyurl)}`,'URL');};
+  try{
+    const [h,ps]=await Promise.all([api('/api/history/'+w.work_id),profiles().catch(()=>[])]);
+    const nm=id=>(ps.find(p=>p.id===id)||{}).name||id.slice(0,8);
+    const el=$('#hist');if(el)el.innerHTML=h.length?h.map(x=>`<div class="hist"><div class="t">${fmt(x.at)} ・ ${esc(nm(x.profile_id))}</div>${esc(x.text.slice(0,80))}${x.text.length>80?'…':''}</div>`).join(''):'まだ投稿していません';
+  }catch{const el=$('#hist');if(el)el.textContent='履歴を読み込めませんでした';}
+}
+
+/* ================= 投稿シート ================= */
+const DEF={crop:[2,2],br:[0.02,0.08],ct:[1.05,1.15],sa:[1.15,1.15],trim:[0.1,0.5]};
+let P=null;
+const STEPS=['アカウント','本文','動画','確認と投稿'];
+const isVid=n=>n.endsWith('.mp4');
+function mediaOf(w){const out=[];for(const p of w.posts){for(const v of p.videos)out.push({id:p.id,name:v,k:'v'});for(const m of p.images)out.push({id:p.id,name:m,k:'i'});}return out;}
+const keyOf=m=>m.id+'/'+m.name;
+
+function openPost(w){
+  const media=mediaOf(w),vids=media.filter(m=>m.k==='v');
+  const text0=((w.posts[0]||{}).text||'')+(w.urls[0]?'\n'+w.urls[0].url:'');
+  P={w,step:0,profile:'',profName:'',accQ:'',text:text0,orig:text0,rw:'idle',cands:[],media,sel:vids.length?[vids[Math.floor(Math.random()*vids.length)]]:[],
+     useEd:true,ed:{state:'idle'},edTok:0,params:structuredClone(DEF),post:{state:'idle'}};
+  $('#modal').hidden=false;
+  profiles().then(()=>{if(P&&P.step===0)renderPost();}).catch(e=>toast('アカウント一覧を取得できません: '+e.message,true));
+  runRewrite();runEdit();renderPost();
+}
+function closePost(){P=null;$('#modal').hidden=true;$('#modal').innerHTML='';load();}
+
+async function runRewrite(){
+  const p=P;p.rw='busy';upd();
+  try{const o=await api('/api/rewrite',{method:'POST',body:JSON.stringify({text:p.orig})});
+    if(P!==p)return;p.cands=o.candidates||[o.text];if(p.text===p.orig||p.rwForce)p.text=p.cands[0];p.rwForce=false;p.rw='ok';}
+  catch(e){if(P!==p)return;p.rw='err';p.rwErr=e.message;}
+  upd();
+}
+function paramBody(){const q=P.params;return {crop_a:q.crop[0]/100,crop_b:q.crop[1]/100,br_a:q.br[0],br_b:q.br[1],ct_a:q.ct[0],ct_b:q.ct[1],sa_a:q.sa[0],sa_b:q.sa[1],trim_min:q.trim[0],trim_max:q.trim[1]};}
+async function runEdit(){
+  const p=P,vid=p.sel.find(m=>m.k==='v');
+  if(!vid||!p.useEd){p.ed={state:'idle'};upd();return;}
+  const tok=++p.edTok;p.ed={state:'busy'};upd();
+  try{const o=await api('/api/edit',{method:'POST',body:JSON.stringify({id:vid.id,name:vid.name,...paramBody()})});
+    if(P!==p||tok!==p.edTok)return;p.ed={state:'ok',key:keyOf(vid),info:o};}
+  catch(e){if(P!==p||tok!==p.edTok)return;p.ed={state:'err',err:e.message};}
+  upd();
+}
+function upd(){if(P)renderPost(true);}
+
+function stepDone(i){
+  if(i===0)return !!P.profile;
+  if(i===1)return !!P.text.trim();
+  if(i===2)return !P.sel.some(m=>m.k==='v')||!P.useEd||P.ed.state==='ok';
+  return false;
+}
+function badge(kind,txt){return `<span class="status ${kind}">${kind==='busy'?'<span class="spin"></span>':kind==='ok'?'✓':kind==='err'?'!':''}${txt}</span>`;}
+
+function renderPost(keepFocus){
+  if(!P)return;
+  const ae=document.activeElement,ta=ae&&ae.tagName==='TEXTAREA'?ae:null,selStart=ta?ta.selectionStart:0;
+  const m=$('#modal');
+  m.innerHTML=`<div class="sheet">
+    <header><h2>投稿を作成</h2><button class="iconbtn" id="pclose" aria-label="閉じる">✕</button></header>
+    <nav class="steps">${STEPS.map((s,i)=>`<button data-s="${i}" class="${i!==P.step&&stepDone(i)?'done':''}" ${i===P.step?'aria-current="step"':''}><span class="n">${i!==P.step&&stepDone(i)?'✓':i+1}</span>${s}</button>`).join('')}</nav>
+    <div class="content">${[stepAcc,stepText,stepMedia,stepConfirm][P.step]()}</div>
+    ${P.post.state==='ok'?'':`<footer>
+      <button class="btn" id="pback" ${P.step===0?'disabled':''}>← 戻る</button>
+      ${P.step<3?`<button class="btn primary" id="pnext">次へ →</button>`:''}</footer>`}
+  </div>`;
+  bindPost();
+  if(ta&&keepFocus){const t=$('#ptext');if(t){t.focus();t.setSelectionRange(selStart,selStart);}}
+}
+
+function stepAcc(){
+  const ps=PROFILES||[],q=P.accQ.toLowerCase();
+  const list=ps.filter(p=>!q||p.name.toLowerCase().includes(q)||p.group.includes(q));
+  const groups=[...new Set(list.map(p=>p.group))];
+  return `<div class="field"><label class="l" for="paccq">投稿するアカウント</label>
+    <input id="paccq" type="text" placeholder="名前・グループで絞り込み" value="${esc(P.accQ)}"></div>
+    ${!PROFILES?'<div class="note">アカウント一覧を読み込み中…</div>':`<div class="accs" role="radiogroup" aria-label="アカウント">${groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="radio" aria-checked="${P.profile===p.id}" data-p="${p.id}"><span class="mark"></span>${esc(p.name)}</button>`).join('')}`).join('')||'<div class="note" style="padding:12px">該当なし</div>'}</div>`}
+    <div class="note">${P.profile?`選択中: <b>${esc(P.profName)}</b>`:'アカウントを選んでください'}</div>`;
+}
+function stepText(){
+  return `<div class="field"><div class="row" style="justify-content:space-between;margin-bottom:6px"><label class="l" for="ptext" style="margin:0">本文</label>
+      <div class="row">${P.rw==='busy'?badge('busy','リライト中'):P.rw==='ok'?badge('ok','リライト済み'):P.rw==='err'?badge('err','リライト失敗(元の文のまま)'):''}</div></div>
+    <textarea id="ptext">${esc(P.text)}</textarea>
+    <div class="row" style="margin-top:8px"><button class="btn sm" id="prw" ${P.rw==='busy'?'disabled':''}>✨ リライトをやり直す</button>
+      <button class="btn sm" id="prestore">↩ 元の文に戻す</button><span class="note" style="margin-left:auto">${[...P.text].length} 文字</span></div>
+    ${P.rw==='err'?`<div class="note" style="color:var(--err)">${esc(P.rwErr||'')}</div>`:''}
+    ${P.cands.length?`<div class="field" style="margin-top:14px"><label class="l">リライト案(押すと本文に入ります)</label>
+      ${P.cands.map((c,i)=>`<button class="cand" data-c="${i}" aria-pressed="${P.text===c}"><b>案${i+1}</b> ${esc(c.replace(/\s*https?:\/\/\S+/g,''))}</button>`).join('')}</div>`:''}</div>
+    <div class="note">リライト結果は自由に編集できます。内容は次の「確認と投稿」で最終確認します。</div>`;
+}
+function stepMedia(){
+  const rg=(k,l,step,min,max)=>`<div>${l}</div><input class="num" type="number" step="${step}" min="${min}" max="${max}" data-r="${k}" data-i="0" value="${P.params[k][0]}"><input class="num" type="number" step="${step}" min="${min}" max="${max}" data-r="${k}" data-i="1" value="${P.params[k][1]}">`;
+  const vid=P.sel.find(m=>m.k==='v');
+  return `<div class="field"><label class="l">添付するメディア(動画は1本、または画像を最大4枚)</label>
+    ${P.media.length?`<div class="tiles">${P.media.map(m=>`<button class="tile" data-m="${esc(keyOf(m))}" aria-pressed="${P.sel.some(s=>keyOf(s)===keyOf(m))}">
+      <img src="${m.k==='v'?'/thumb/':'/files/'}${m.id}/${m.name}" alt=""><span class="lab">${m.k==='v'?'🎬 動画':'🖼 画像'} ・ ${esc(m.name)}</span></button>`).join('')}</div>`:'<div class="note">この作品にはメディアがありません(本文のみ投稿されます)</div>'}
+    ${P.media.filter(m=>m.k==='v').length>1?`<div class="row" style="margin-top:10px"><button class="btn sm" id="pdice">🎲 別の動画をランダムで選ぶ</button></div>`:''}</div>
+  ${vid?`<div class="field"><div class="row" style="justify-content:space-between"><label class="row" style="gap:8px"><input type="checkbox" id="puse" ${P.useEd?'checked':''}> 動画を加工する(色味・切り抜き・前後カット)</label>
+      <div class="row">${P.useEd?(P.ed.state==='busy'?badge('busy','加工中(数十秒かかります)'):P.ed.state==='ok'?badge('ok','加工済み'):P.ed.state==='err'?badge('err','加工失敗'):''):badge('', '加工なし')}</div></div>
+    ${P.ed.state==='err'?`<div class="note" style="color:var(--err)">${esc(P.ed.err)}</div>`:''}
+    ${P.useEd&&P.ed.state==='ok'?`<video src="${P.ed.info.url}" preload="metadata" controls style="width:100%;max-height:300px;background:#000;border-radius:10px;margin-top:10px"></video>
+      <div class="note">先頭 ${P.ed.info.head}秒・末尾 ${P.ed.info.tail}秒カット ／ 切り抜き ${(P.ed.info.crop*100).toFixed(1)}% ／ 明るさ ${P.ed.info.brightness} ／ コントラスト ${P.ed.info.contrast} ／ 彩度 ${P.ed.info.saturation}</div>`:''}
+    <div class="row" style="margin-top:10px"><button class="btn sm" id="predo" ${P.ed.state==='busy'?'disabled':''}>🎞 加工をやり直す</button></div>
+    <details style="margin-top:12px"><summary>加工の詳細設定(毎回、範囲内でランダムに決まります)</summary>
+      <div class="rng"><div></div><div class="note">最小</div><div class="note">最大</div>
+      ${rg('crop','切り抜き(四辺・%)',0.5,0,10)}${rg('br','明るさ',0.01,-0.3,0.3)}${rg('ct','コントラスト',0.05,0.5,2)}${rg('sa','彩度',0.05,0,3)}${rg('trim','前後カット(秒)',0.1,0,2)}</div></details></div>`:''}`;
+}
+function blockers(){
+  const b=[];
+  if(!P.profile)b.push('アカウントが未選択です');
+  if(!P.text.trim())b.push('本文が空です');
+  const hasV=P.sel.some(m=>m.k==='v');
+  if(hasV&&P.useEd&&P.ed.state==='busy')b.push('動画を加工しています。完了までお待ちください');
+  if(hasV&&P.useEd&&P.ed.state==='err')b.push('動画の加工に失敗しました。やり直すか、「加工する」を外してください');
+  if(hasV&&P.useEd&&P.ed.state==='idle')b.push('動画が未加工です');
+  return b;
+}
+function stepConfirm(){
+  const po=P.post;
+  if(po.state==='ok')return `<div class="result"><div style="font-size:42px">✅</div><h3>投稿しました</h3>
+    <div class="note">${esc(P.profName)} ${po.link?'':'(投稿IDの取得はできませんでした)'}</div>
+    <div class="row" style="justify-content:center;margin-top:16px">${po.link?`<a class="btn primary" href="${esc(po.link)}" target="_blank" rel="noopener">X で投稿を開く</a>`:''}
+      <button class="btn" id="pagain">別のアカウントで投稿する</button><button class="btn" id="pclose2">閉じる</button></div></div>`;
+  const vid=P.sel.find(m=>m.k==='v'),imgs=P.sel.filter(m=>m.k==='i'),bl=blockers();
+  const mediaHtml=vid?(P.useEd&&P.ed.state==='ok'?`<video src="${P.ed.info.url}" preload="metadata" controls></video>`:`<video src="/files/${vid.id}/${vid.name}" controls></video>`):imgs.map(m=>`<img src="/files/${m.id}/${m.name}" alt="">`).join('');
+  return `<div class="preview"><div class="who"><div class="avatar">${esc((P.profName||'?').slice(0,1))}</div><div><b>${esc(P.profName||'(アカウント未選択)')}</b><div class="note" style="margin:0">投稿プレビュー</div></div></div>
+    <div class="tx">${esc(P.text)}</div>${mediaHtml}</div>
+    <ul class="checks"><li class="${P.profile?'':'ng'}">投稿先: ${esc(P.profName||'未選択')}</li>
+      <li class="${P.text.trim()?'':'ng'}">本文 ${[...P.text].length} 文字</li>
+      <li>添付: ${vid?(P.useEd?'動画1本(加工版)':'動画1本(未加工)'):imgs.length?`画像${imgs.length}枚`:'なし'}</li></ul>
+    ${bl.map(x=>`<div class="note" style="color:var(--warn)">! ${esc(x)}</div>`).join('')}
+    ${po.state==='err'?`<div class="note" style="color:var(--err)">投稿に失敗しました: ${esc(po.err)}</div>`:''}
+    <div style="margin-top:16px"><button class="btn go block" id="psubmit" ${bl.length||po.state==='busy'?'disabled':''}>${po.state==='busy'?'投稿中…(最大1分ほどかかります)':`「${esc(P.profName||'アカウント')}」で投稿する`}</button>
+    <div class="note" style="text-align:center">このボタンを押すと、すぐに X へ公開されます</div></div>`;
+}
+
+function bindPost(){
+  const m=$('#modal');
+  $('#pclose').onclick=closePost;
+  const pc2=$('#pclose2');if(pc2)pc2.onclick=closePost;
+  m.querySelectorAll('.steps button').forEach(b=>b.onclick=()=>{P.step=+b.dataset.s;renderPost();});
+  const nx=$('#pnext');if(nx)nx.onclick=()=>{P.step++;renderPost();};
+  const bk=$('#pback');if(bk)bk.onclick=()=>{P.step--;renderPost();};
+  const aq=$('#paccq');if(aq)aq.oninput=e=>{P.accQ=e.target.value;const pos=e.target.selectionStart;renderPost();const n=$('#paccq');n.focus();n.setSelectionRange(pos,pos);};
+  m.querySelectorAll('.acc').forEach(b=>b.onclick=()=>{P.profile=b.dataset.p;P.profName=(PROFILES.find(p=>p.id===b.dataset.p)||{}).name||'';renderPost();});
+  const t=$('#ptext');if(t)t.oninput=e=>{P.text=e.target.value;};
+  const rw=$('#prw');if(rw)rw.onclick=()=>{P.rwForce=true;runRewrite();};
+  m.querySelectorAll('.cand').forEach(b=>b.onclick=()=>{P.text=P.cands[+b.dataset.c];renderPost();});
+  const rs=$('#prestore');if(rs)rs.onclick=()=>{P.text=P.orig;renderPost();};
+  m.querySelectorAll('.tile').forEach(b=>b.onclick=()=>{
+    const mm=P.media.find(x=>keyOf(x)===b.dataset.m),on=P.sel.some(s=>keyOf(s)===b.dataset.m);
+    if(mm.k==='v'){P.sel=[mm];runEdit();}
+    else{P.sel=P.sel.filter(s=>s.k==='i');if(on)P.sel=P.sel.filter(s=>keyOf(s)!==b.dataset.m);else if(P.sel.length<4)P.sel.push(mm);else toast('画像は最大4枚です',true);}
+    renderPost();});
+  const dice=$('#pdice');if(dice)dice.onclick=()=>{const v=P.media.filter(x=>x.k==='v'&&keyOf(x)!==keyOf(P.sel[0]||{}));P.sel=[v[Math.floor(Math.random()*v.length)]];runEdit();renderPost();};
+  const use=$('#puse');if(use)use.onchange=e=>{P.useEd=e.target.checked;if(P.useEd)runEdit();else{P.ed={state:'idle'};renderPost();}};
+  const rd=$('#predo');if(rd)rd.onclick=()=>runEdit();
+  m.querySelectorAll('[data-r]').forEach(i=>i.onchange=e=>{P.params[i.dataset.r][+i.dataset.i]=+e.target.value;});
+  const ag=$('#pagain');if(ag)ag.onclick=()=>{P.post={state:'idle'};P.step=0;P.profile='';P.profName='';renderPost();};
+  const sb=$('#psubmit');if(sb)sb.onclick=submitPost;
+}
+
+async function submitPost(){
+  const p=P;if(blockers().length||p.post.state==='busy')return;
+  p.post={state:'busy'};renderPost();
+  const vid=p.sel.find(m=>m.k==='v');
+  const files=vid?[{id:vid.id,name:vid.name,edited:p.useEd}]:p.sel.map(m=>({id:m.id,name:m.name,edited:false}));
+  try{
+    const o=await api('/api/post',{method:'POST',body:JSON.stringify({work_id:p.w.work_id,profile_id:p.profile,text:p.text.trim(),files})});
+    if(o.code!==0)throw new Error(o.msg||JSON.stringify(o));
+    const d=o.data||{},jid=d.job_id||d.id||d.jobId;let job=null;
+    for(let i=0;jid&&i<40;i++){
+      job=(await api('/api/job/'+jid).catch(()=>({}))).data||null;
+      if(job&&['done','failed','error','finished','completed'].includes(String(job.state).toLowerCase()))break;
+      await new Promise(r=>setTimeout(r,2000));
+    }
+    if(P!==p)return;
+    if(job&&(job.failed>0||job.state==='failed'||job.state==='error'))throw new Error((job.error)||'Xdeck 側で投稿に失敗しました');
+    const label=((job&&job.steps&&job.steps[0]||{}).label||'').replace('@',''),tid=job&&job.tweet_id;
+    p.post={state:'ok',link:label&&tid?`https://x.com/${label}/status/${tid}`:''};
+  }catch(e){if(P!==p)return;p.post={state:'err',err:e.message};}
+  renderPost();
+}
+
+document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!$('#modal').hidden)closePost();else if(openId)closeDrawer();});
+drawChips();
+// URL から直接開ける: #w=作品ID / #post=作品ID&step=2
+load().then(()=>{
+  const h=new URLSearchParams(location.hash.slice(1));
+  if(h.get('w'))openDrawer(h.get('w'));
+  if(h.get('post')){const w=works.find(x=>x.work_id===h.get('post'));if(w){openDrawer(w.work_id);openPost(w);if(h.get('step'))P.step=+h.get('step'),renderPost();}}
+});
+</script>
+</body>
+</html>
