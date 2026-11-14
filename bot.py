@@ -352,6 +352,256 @@ async def send_post(work_id: str, profile_id: str, text: str, paths: list[str]) 
     return res
 
 
+async def add_sched(work_id: str, profile_id: str, pname: str, text: str, paths: list[str], at: datetime,
+                    extra: dict | None = None) -> dict:
+    sid = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + os.urandom(3).hex()
+    # 加工済み動画は後から作り直されても変わらないよう、予約時点のコピーを保持する
+    snap = SAVE_DIR / "_sched" / sid
+    snap.mkdir(parents=True, exist_ok=True)
+    kept = []
+    for src in paths:
+        dst = snap / Path(src).name
+        await asyncio.to_thread(shutil.copy2, src, dst)
+        kept.append(str(dst))
+    e = {"id": sid, "at": at.isoformat(timespec="minutes"), "status": "pending",
+         "work_id": work_id, "profile_id": profile_id, "profile_name": pname,
+         "text": text, "media": kept, "created": datetime.now().isoformat(timespec="seconds"), **(extra or {})}
+    async with SCHED_LOCK:
+        items = load_sched()
+        items.append(e)
+        save_sched(items)
+    return e
+
+
+def get_profiles() -> list[dict]:
+    prof = xdeck("GET", "profile/list")["data"]["list"]
+    gname = {g["group_id"]: g["name"] for g in xdeck("GET", "group/list")["data"]["list"]}
+    return [{"id": x["profile_id"], "name": x["name"], "group": gname.get(x["group_id"], "")} for x in prof]
+
+
+def posted_pairs() -> set[tuple[str, str]]:
+    """(work_id, profile_id): すでに投稿済み、または予約済みの組み合わせ"""
+    out = {(x["work_id"], x["profile_id"]) for x in load_sched() if x["status"] in ("pending", "running", "done")}
+    f = SAVE_DIR / "_posts.log"
+    if f.exists():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                e = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            if e.get("event") == "response" and (e.get("response") or {}).get("code") == 0:
+                out.add((e.get("work_id", ""), e.get("profile_id", "")))
+    return out
+
+
+def last_posts() -> dict[str, str]:
+    """アカウントごとの前回投稿日時(このボードから投稿した分)。ISO文字列"""
+    out: dict[str, str] = {}
+
+    def upd(pid: str, at: str) -> None:
+        if pid and at and at > out.get(pid, ""):
+            out[pid] = at
+
+    f = SAVE_DIR / "_posts.log"
+    if f.exists():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                e = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            if e.get("event") == "response" and (e.get("response") or {}).get("code") == 0:
+                upd(e.get("profile_id", ""), e.get("at", ""))
+    for x in load_sched():
+        if x["status"] == "done":
+            upd(x["profile_id"], x.get("finished") or x["at"])
+    return out
+
+
+SB_FILE = lambda: SAVE_DIR / "_shadowban.json"  # noqa: E731
+SB_JOBS: dict[str, dict] = {}
+SB_LOCK = asyncio.Lock()
+
+
+def sb_load() -> dict:
+    f = SB_FILE()
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+
+
+def sb_summary(r: dict) -> dict:
+    """Xdeck の判定結果から、ボードで使う要点を取り出す。
+    🟡注意 = 検索デブースト・メディア制限・センシティブ・ログアウトで非表示 のどれか(理由を文字で併記)。
+    検索を使う判定(検索BAN・検索デブースト・メディア制限)は、検索が1回も実行されていないと
+    確証がないので「(未検証)」と明記する"""
+    c = r.get("checks") or {}
+    ran = ((r.get("diagnostics") or {}).get("searchRequests") or 0) > 0
+    search_based = {"searchBan", "searchDeboost", "mediaBan"}
+    names = {"searchBan": "検索BAN", "searchDeboost": "検索デブースト", "mediaBan": "メディア制限",
+             "sensitive": "センシティブ判定", "hiddenWhenLoggedOut": "ログアウトで非表示",
+             "suspended": "凍結", "locked": "ロック", "notFound": "見つからない"}
+    posts = r.get("posts") or []
+    tested = [x for x in posts if x.get("foundBySearch") is not None]
+    missed = [x for x in tested if x.get("foundBySearch") is False]
+    reasons, hard = [], False
+    for k, label in names.items():
+        if not c.get(k):
+            continue
+        extra = []
+        if k in search_based and not ran:
+            extra.append("未検証")
+        if k == "searchDeboost" and tested:
+            extra.append(f"検索に出ない{len(missed)}/{len(tested)}件")
+        reasons.append(label + (f"({'・'.join(extra)})" if extra else ""))
+        if k in ("suspended", "locked", "notFound") or (k == "searchBan" and ran):
+            hard = True
+    note = "" if ran else "検索が実行されていない(検索系の判定は未検証)"
+    if r.get("error"):
+        level, label, note = "unknown", "判定不能", str(r.get("error"))[:120]
+    elif hard:
+        level, label = "bad", "規制の疑い"
+    elif reasons:
+        level, label = "warn", "注意"
+    elif not ran:
+        level, label = "unknown", "判定不能"  # 検索が実行されていないので「問題なし」とも言えない
+    else:
+        level, label = "ok", "問題なし"
+    return {"level": level, "label": label, "verdict": r.get("verdict"),
+            "flags": reasons, "score": (r.get("score") or {}).get("total"),
+            "error": note, "search_requests": (r.get("diagnostics") or {}).get("searchRequests"),
+            "checked_at": datetime.now().isoformat(timespec="seconds")}
+
+
+async def run_shadowban(job: str, profile_ids: list[str]) -> None:
+    st = SB_JOBS[job]
+    try:
+        for pid in profile_ids:
+            try:
+                info = (await asyncio.to_thread(xdeck, "GET", "x/get", params={"profile_id": pid}))["data"]["profile"]
+                res = await asyncio.to_thread(xdeck, "GET", "x/shadowban", params={"screen_name": info["screenName"]}, timeout=180)
+                if res.get("code") != 0:
+                    raise RuntimeError(res.get("msg") or "failed")
+                summ = sb_summary(res["data"])
+            except Exception as e:  # noqa: BLE001
+                summ = {"level": "unknown", "label": "判定不能", "verdict": None, "flags": [], "score": None,
+                        "error": str(e)[:120], "checked_at": datetime.now().isoformat(timespec="seconds")}
+            async with SB_LOCK:
+                d = sb_load()
+                d[pid] = summ
+                SB_FILE().write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+            st["done"] += 1
+        st["state"] = "finished"
+    except Exception as e:  # noqa: BLE001
+        st["state"] = "error"
+        st["error"] = str(e)[:200]
+
+
+BULK: dict[str, dict] = {}
+
+
+def pick_media(work: dict):
+    """作品から添付を1つ選ぶ。動画があれば動画をランダムで1本、なければ画像(最大4枚)"""
+    import random
+    vids = [(p["id"], v) for p in work["posts"] for v in p["videos"]]
+    if vids:
+        pid, v = random.choice(vids)
+        return next(p for p in work["posts"] if p["id"] == pid), [(pid, v, "v")]
+    for p in work["posts"]:
+        if p["images"]:
+            return p, [(p["id"], i, "i") for i in p["images"][:4]]
+    return None, []
+
+
+async def prep_one(work: dict, profile: dict, at: datetime, batch: str) -> dict:
+    """1件分: 本文リライト + 動画加工 + 予約登録"""
+    import random
+    post, media = pick_media(work)
+    if not media:
+        raise RuntimeError("動画も画像もない作品です")
+    base = re.sub(r"\s*https?://\S+", "", post["text"]).strip()
+    text = base
+    if base:
+        try:
+            cands = await asyncio.to_thread(rewrite_text, base)
+            text = random.choice(cands) if cands else base
+        except Exception:  # noqa: BLE001
+            text = base  # リライトに失敗したら元の文のまま
+    if not text:
+        raise RuntimeError("本文が空です")
+    paths = []
+    for pid, name, kind in media:
+        src = SAVE_DIR / pid / name
+        if kind == "v":
+            dest = src.parent / "_edited" / src.name
+            u = random.uniform
+            lo, hi = 0.1, 0.5
+            async with EDIT_LOCK:  # 同じ動画の _edited を同時に書かないように
+                await asyncio.to_thread(edit_video, src, dest, 0.02, round(u(0.02, 0.08), 3), round(u(1.05, 1.15), 3),
+                                        1.15, round(u(lo, hi), 2), round(u(lo, hi), 2))
+                kept = await add_sched(work["work_id"], profile["id"], profile["name"], text, [str(dest)], at,
+                                       {"bulk": batch})
+            return kept
+        paths.append(str(src))
+    return await add_sched(work["work_id"], profile["id"], profile["name"], text, paths, at, {"bulk": batch})
+
+
+EDIT_LOCK = asyncio.Lock()
+
+
+async def run_bulk(job: str, profile_ids: list[str], start: datetime, end: datetime, per: int) -> None:
+    import random
+    st = BULK[job]
+    try:
+        profs = {p["id"]: p for p in await asyncio.to_thread(get_profiles)}
+        chosen = [profs[i] for i in profile_ids if i in profs and group_ok(profs[i]["group"])]
+        works = [w for w in await asyncio.to_thread(list_items) if pick_media(w)[1]]
+        used = posted_pairs()
+        usage: dict[str, int] = {w["work_id"]: 0 for w in works}
+        plan = []
+        for pr in chosen:
+            elig = [w for w in works if (w["work_id"], pr["id"]) not in used]
+            random.shuffle(elig)
+            elig.sort(key=lambda w: usage[w["work_id"]])  # まだ使われていない作品を優先
+            pick = elig[:per]
+            if len(pick) < per:
+                st["notes"].append(f"{pr['name']}: 投稿できる作品が{len(pick)}件しかありません")
+            span = max((end - start).total_seconds(), 60)
+            # 窓の中で等間隔に区切り、各区間内でランダムに選ぶ(同じ時刻に固まりにくい)
+            for i, w in enumerate(pick):
+                seg = span / max(len(pick), 1)
+                t = start + timedelta(seconds=seg * i + random.uniform(0, seg))
+                plan.append((w, pr, t.replace(second=0, microsecond=0)))
+                usage[w["work_id"]] += 1
+        st["total"] = len(plan)
+        sem = asyncio.Semaphore(2)
+
+        async def one(w, pr, t):
+            async with sem:
+                try:
+                    await prep_one(w, pr, t, job)
+                except Exception as e:  # noqa: BLE001
+                    st["errors"].append(f"{pr['name']}: {str(e)[:120]}")
+                st["done"] += 1
+
+        await asyncio.gather(*(one(*x) for x in plan))
+        st["state"] = "finished"
+    except Exception as e:  # noqa: BLE001
+        st["state"] = "error"
+        st["errors"].append(str(e)[:200])
+
+
+IMP_TARGET = int(os.environ.get("IMP_TARGET", "5000"))  # このインプ数に達したら Xdeck が通知する
+
+
+def register_imp_alert(url: str) -> bool:
+    """投稿を Xdeck のインプ達成通知に登録する(失敗しても投稿には影響させない)"""
+    try:
+        r = xdeck("POST", "imp-alerts/create", json={
+            "tweet": url, "url": url, "target": IMP_TARGET, "target_views": IMP_TARGET, "targetViews": IMP_TARGET})
+        return r.get("code") == 0
+    except Exception as e:  # noqa: BLE001
+        print("imp alert error:", e)
+        return False
+
+
 async def run_due_posts() -> None:
     now = datetime.now()
     async with SCHED_LOCK:
@@ -382,6 +632,7 @@ async def run_due_posts() -> None:
             label = ((job.get("steps") or [{}])[0].get("label") or "").replace("@", "")
             if label and job.get("tweet_id"):
                 result["link"] = f"https://x.com/{label}/status/{job['tweet_id']}"
+                result["imp_alert"] = await asyncio.to_thread(register_imp_alert, result["link"])
             status = "done"
         except Exception as e:  # noqa: BLE001
             status, result["error"] = "failed", str(e)[:300]
@@ -441,8 +692,16 @@ async def start_web():
         prof = (await asyncio.to_thread(xdeck, "GET", "profile/list"))["data"]["list"]
         groups = (await asyncio.to_thread(xdeck, "GET", "group/list"))["data"]["list"]
         gname = {g["group_id"]: g["name"] for g in groups}
+        last = await asyncio.to_thread(last_posts)
+        sb = await asyncio.to_thread(sb_load)
+        nxt: dict[str, list[str]] = {}
+        for x in await asyncio.to_thread(load_sched):
+            if x["status"] in ("pending", "running"):
+                nxt.setdefault(x["profile_id"], []).append(x["at"])
         return web.json_response([
-            {"id": x["profile_id"], "name": x["name"], "group": gname.get(x["group_id"], "")}
+            {"id": x["profile_id"], "name": x["name"], "group": gname.get(x["group_id"], ""),
+             "last": last.get(x["profile_id"], ""), "sb": sb.get(x["profile_id"]),
+             "next": min(nxt.get(x["profile_id"], [""])), "next_n": len(nxt.get(x["profile_id"], []))}
             for x in prof if group_ok(gname.get(x["group_id"], ""))])
 
     async def api_rewrite(req):
@@ -495,23 +754,56 @@ async def start_web():
         if at <= datetime.now():
             raise web.HTTPBadRequest(text="予約日時は現在より後にしてください")
         profile_id, text, pname, paths = await build_post(body)
-        sid = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + os.urandom(3).hex()
-        # 加工済み動画は後から作り直されても変わらないよう、予約時点のコピーを保持する
-        snap = SAVE_DIR / "_sched" / sid
-        snap.mkdir(parents=True, exist_ok=True)
-        kept = []
-        for src in paths:
-            dst = snap / Path(src).name
-            await asyncio.to_thread(shutil.copy2, src, dst)
-            kept.append(str(dst))
-        e = {"id": sid, "at": at.isoformat(timespec="minutes"), "status": "pending",
-             "work_id": body.get("work_id", ""), "profile_id": profile_id, "profile_name": pname,
-             "text": text, "media": kept, "created": datetime.now().isoformat(timespec="seconds")}
-        async with SCHED_LOCK:
-            items = load_sched()
-            items.append(e)
-            save_sched(items)
+        e = await add_sched(body.get("work_id", ""), profile_id, pname, text, paths, at)
         return web.json_response(e)
+
+    async def api_imp_alert(req):
+        b = await req.json()
+        url = str(b.get("url", ""))
+        if not re.match(r"^https://x\.com/[^/]+/status/\d+$", url):
+            raise web.HTTPBadRequest(text="invalid url")
+        ok = await asyncio.to_thread(register_imp_alert, url)
+        return web.json_response({"ok": ok, "target": IMP_TARGET})
+
+    async def api_sb_start(req):
+        b = await req.json()
+        ids = [str(x) for x in b.get("profile_ids", [])]
+        valid = {p["id"] for p in await asyncio.to_thread(get_profiles) if group_ok(p["group"])}
+        ids = [i for i in ids if i in valid]
+        if not ids:
+            raise web.HTTPBadRequest(text="対象のアカウントがありません")
+        job = "sb-" + datetime.now().strftime("%H%M%S") + "-" + os.urandom(2).hex()
+        SB_JOBS[job] = {"state": "running", "total": len(ids), "done": 0}
+        asyncio.create_task(run_shadowban(job, ids))  # 1件ずつ順番に(Xdeck側の負荷を避ける)
+        return web.json_response({"job": job})
+
+    async def api_sb_status(req):
+        st = SB_JOBS.get(req.match_info["job"])
+        if not st:
+            raise web.HTTPNotFound()
+        return web.json_response(st)
+
+    async def api_bulk(req):
+        b = await req.json()
+        try:
+            start = max(datetime.fromisoformat(str(b["start"])), datetime.now() + timedelta(minutes=2))
+            end = datetime.fromisoformat(str(b["end"]))
+            per = int(b.get("per", 1))
+        except (KeyError, ValueError):
+            raise web.HTTPBadRequest(text="入力が正しくありません")
+        ids = [str(x) for x in b.get("profile_ids", [])]
+        if not ids or not 1 <= per <= 20 or end <= start:
+            raise web.HTTPBadRequest(text="アカウント・件数(1〜20)・時間帯(開始より後の終了)を確認してください")
+        job = "bulk-" + datetime.now().strftime("%Y%m%d%H%M%S") + "-" + os.urandom(2).hex()
+        BULK[job] = {"state": "running", "total": 0, "done": 0, "errors": [], "notes": []}
+        asyncio.create_task(run_bulk(job, ids, start, end, per))
+        return web.json_response({"job": job})
+
+    async def api_bulk_status(req):
+        st = BULK.get(req.match_info["job"])
+        if not st:
+            raise web.HTTPNotFound()
+        return web.json_response(st)
 
     async def api_sched_list(_):
         return web.json_response(sorted(load_sched(), key=lambda x: x["at"]))
@@ -606,7 +898,7 @@ async def start_web():
         web.get("/thumb/{id}/{name}", thumb), web.get("/api/history/{work}", api_history),
         web.post("/api/edit", api_edit), web.get("/edited/{id}/{name}", edited_file),
         web.get("/api/profiles", api_profiles), web.post("/api/rewrite", api_rewrite),
-        web.post("/api/post", api_post), web.post("/api/move", api_move), web.get("/api/schedule", api_sched_list),
+        web.post("/api/post", api_post), web.post("/api/bulk", api_bulk), web.post("/api/shadowban", api_sb_start), web.get("/api/shadowban/{job}", api_sb_status), web.post("/api/imp_alert", api_imp_alert), web.get("/api/bulk/{job}", api_bulk_status), web.post("/api/move", api_move), web.get("/api/schedule", api_sched_list),
         web.post("/api/schedule", api_sched_add), web.delete("/api/schedule/{sid}", api_sched_del), web.get("/api/job/{job}", api_job),
     ])
     runner = web.AppRunner(app)

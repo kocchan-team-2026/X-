@@ -100,7 +100,7 @@ textarea,select,input[type=text],.num{width:100%;background:#0f1115;border:1px s
 textarea{min-height:170px;resize:vertical;line-height:1.7}
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .status{display:inline-flex;align-items:center;gap:6px;font-size:12px;border-radius:999px;padding:2px 10px;border:1px solid var(--border);color:var(--muted)}
-.status.ok{color:var(--ok);border-color:#256b4d}.status.busy{color:var(--warn);border-color:#6b5320}.status.err{color:var(--err);border-color:#7a3333}
+.status.wait{color:#8ecdf8;border-color:#2f4a6b}.status.ok{color:var(--ok);border-color:#256b4d}.status.busy{color:var(--warn);border-color:#6b5320}.status.err{color:var(--err);border-color:#7a3333}
 .spin{width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
 .accs{max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:10px}
@@ -148,6 +148,10 @@ details summary{cursor:pointer;color:var(--muted)}
 .srow .main{flex:1;min-width:0}
 .srow .stx{color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin:4px 0}
 #pat{background:var(--surface2);color:var(--text,#e8eaf0);border:1px solid var(--border);border-radius:8px;padding:6px 10px}
+.tsel{background:var(--surface2);color:var(--text,#e8eaf0);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:14px}
+.chipsrow{flex-wrap:wrap}
+.lastp{margin-left:auto;color:var(--muted);font-size:12px;font-weight:400}
+.sbb{margin-left:6px}.sbt{font-size:12px;color:var(--muted);margin-left:4px}
 </style>
 </head>
 <body>
@@ -157,6 +161,8 @@ details summary{cursor:pointer;color:var(--muted)}
   <input id="q" class="search" type="search" placeholder="本文・投稿者・URLで検索" aria-label="検索">
   <div class="chips" id="chips" role="group" aria-label="絞り込み"></div>
   <span class="count" id="count"></span>
+  <button class="btn" id="sbbtn">🔍 シャドウバン判定</button>
+  <button class="btn" id="bulkbtn">🎲 一括予約</button>
   <button class="btn" id="schedbtn">🕒 予約</button>
   <button class="btn" id="refprof" title="Xdeckのアカウント・グループ情報を取得し直す">↻ アカウント更新</button>
 </header>
@@ -166,6 +172,8 @@ details summary{cursor:pointer;color:var(--muted)}
 <aside class="drawer" id="drawer" role="dialog" aria-label="作品の詳細" hidden></aside>
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="投稿を作成" hidden></div>
 <div class="modal" id="schedpanel" role="dialog" aria-modal="true" aria-label="予約投稿" hidden></div>
+<div class="modal" id="bulkpanel" role="dialog" aria-modal="true" aria-label="一括予約" hidden></div>
+<div class="modal" id="sbpanel" role="dialog" aria-modal="true" aria-label="シャドウバン判定" hidden></div>
 <div id="toast" aria-live="polite"></div>
 
 <script>
@@ -345,7 +353,7 @@ function stepAcc(){
   const groups=[...new Set(list.map(p=>p.group))];
   return `<div class="field"><div class="row" style="justify-content:space-between;margin-bottom:6px"><label class="l" for="paccq" style="margin:0">投稿するアカウント</label><button class="btn" id="pref" style="padding:4px 10px">↻ 更新</button></div>
     <input id="paccq" type="text" placeholder="名前・グループで絞り込み" value="${esc(P.accQ)}"></div>
-    ${!PROFILES?'<div class="note">アカウント一覧を読み込み中…</div>':`<div class="accs" role="radiogroup" aria-label="アカウント">${groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="radio" aria-checked="${P.profile===p.id}" data-p="${p.id}"><span class="mark"></span>${esc(p.name)}</button>`).join('')}`).join('')||'<div class="note" style="padding:12px">該当なし</div>'}</div>`}
+    ${!PROFILES?'<div class="note">アカウント一覧を読み込み中…</div>':`<div class="accs" role="radiogroup" aria-label="アカウント">${groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="radio" aria-checked="${P.profile===p.id}" data-p="${p.id}"><span class="mark"></span>${esc(p.name)} ${sbBadge(p)}<span class="lastp">${esc(lastTxt(p))}</span></button>`).join('')}`).join('')||'<div class="note" style="padding:12px">該当なし</div>'}</div>`}
     <div class="note">${P.profile?`選択中: <b>${esc(P.profName)}</b>`:'アカウントを選んでください'}</div>`;
 }
 function stepText(){
@@ -386,6 +394,12 @@ function blockers(){
   if(hasV&&P.useEd&&P.ed.state==='idle')b.push('動画が未加工です');
   return b;
 }
+const SBI={ok:['🟢','問題なし'],warn:['🟡','注意'],bad:['🔴','規制の疑い'],unknown:['⚪','判定不能']};
+function sbBadge(p){if(!p.sb)return '<span class="sbb" title="未判定">⚫</span>';const i=SBI[p.sb.level]||SBI.unknown;
+  const tip=`${p.sb.label}${p.sb.flags&&p.sb.flags.length?'('+p.sb.flags.join('・')+')':''} ${p.sb.checked_at.slice(5,16).replace('T',' ')}${p.sb.error?' '+p.sb.error:''}`;
+  return `<span class="sbb" title="${esc(tip)}">${i[0]}</span><span class="sbt">${esc(p.sb.label)}${p.sb.flags&&p.sb.flags.length?`:${esc(p.sb.flags.join("・"))}`:p.sb.error?`:${esc(p.sb.error)}`:''}</span>`;}
+function lastTxt(p){const l=p.last?`前回 ${fmtAt(p.last).slice(5)}`:'前回 なし';
+  return p.next?`${l} ／ 予約 ${fmtAt(p.next).slice(5)}${p.next_n>1?`(他${p.next_n-1}件)`:''}`:l;}
 function pad(n){return String(n).padStart(2,'0');}
 function toLocalInput(d){return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;}
 function defAt(){const d=new Date(Date.now()+3600e3);d.setMinutes(0,0,0);return toLocalInput(d);}
@@ -394,6 +408,7 @@ function stepConfirm(){
   const po=P.post;
   if(po.state==='ok')return `<div class="result"><div style="font-size:42px">✅</div><h3>投稿しました</h3>
     <div class="note">${esc(P.profName)} ${po.link?'':'(投稿IDの取得はできませんでした)'}</div>
+    ${po.imp?`<div class="note">🔔 ${po.imp.toLocaleString()}インプに達したら Discord に通知します</div>`:''}
     <div class="row" style="justify-content:center;margin-top:16px">${po.link?`<a class="btn primary" href="${esc(po.link)}" target="_blank" rel="noopener">X で投稿を開く</a>`:''}
       <button class="btn" id="pagain">別のアカウントで投稿する</button><button class="btn" id="pclose2">閉じる</button></div></div>`;
   if(po.state==='sched')return `<div class="result"><div style="font-size:42px">🕒</div><h3>予約しました</h3>
@@ -473,24 +488,175 @@ async function submitPost(){
     if(job&&(job.failed>0||job.state==='failed'||job.state==='error'))throw new Error((job.error)||'Xdeck 側で投稿に失敗しました');
     const label=((job&&job.steps&&job.steps[0]||{}).label||'').replace('@',''),tid=job&&job.tweet_id;
     p.post={state:'ok',link:label&&tid?`https://x.com/${label}/status/${tid}`:''};
+    if(p.post.link)api('/api/imp_alert',{method:'POST',body:JSON.stringify({url:p.post.link})}).then(r=>{if(P===p){p.post.imp=r.ok?r.target:0;renderPost();}}).catch(()=>{});
   }catch(e){if(P!==p)return;p.post={state:'err',err:e.message};}
   renderPost();
 }
 
+/* ===== 一括予約 ===== */
+let BK=null;
+async function openBulk(){
+  const t=new Date(Date.now()+3600e3);t.setMinutes(t.getMinutes()<30?30:60,0,0);
+  const day=ymd(new Date());
+  BK={sel:new Set(),q:'',sd:day,st:hm(t),ed:day,et:'23:30',per:1,state:'form',preset:''};
+  if(BK.st>=BK.et){BK.sd=BK.ed=ymd(new Date(Date.now()+864e5));BK.st='10:00';BK.et='22:00';}
+  $('#bulkpanel').hidden=false;drawBulk();
+  try{await profiles();}catch(e){toast('アカウント一覧を取得できません: '+e.message,true);}
+  if(BK)drawBulk();
+}
+const WD='日月火水木金土';
+function ymd(d){return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;}
+function hm(d){return `${pad(d.getHours())}:${pad(d.getMinutes())}`;}
+function dayOpts(){const o=[],n=new Date();for(let i=0;i<15;i++){const d=new Date(n.getFullYear(),n.getMonth(),n.getDate()+i);
+  o.push({v:ymd(d),l:`${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]})${i===0?' 今日':i===1?' 明日':i===2?' 明後日':''}`});}return o;}
+const TIMES=Array.from({length:48},(_,i)=>`${pad(i>>1)}:${i%2?'30':'00'}`);
+const BPRE=[['朝','06:00','10:00'],['昼','11:00','14:00'],['夕方','17:00','20:00'],['夜','20:00','24:00'],['終日','08:00','23:30']];
+const bStart=B=>`${B.sd}T${B.st}`,bEnd=B=>`${B.ed}T${B.et}`;
+function applyPre(B,pre){B.preset=pre[0];B.st=pre[1];B.ed=B.sd;
+  if(pre[2]==='24:00'){B.et='00:00';const d=new Date(B.sd+'T00:00');d.setDate(d.getDate()+1);B.ed=ymd(d);}else B.et=pre[2];}
+function dsel(id,val){return `<select id="${id}" class="tsel">${dayOpts().map(o=>`<option value="${o.v}" ${o.v===val?'selected':''}>${o.l}</option>`).join('')}</select>`;}
+function tsel(id,val){return `<select id="${id}" class="tsel">${TIMES.map(t=>`<option ${t===val?'selected':''}>${t}</option>`).join('')}</select>`;}
+function bSummary(B){const a=new Date(bStart(B)),b=new Date(bEnd(B)),mins=(b-a)/6e4;
+  if(!(mins>0))return '⚠ 終了は開始より後にしてください';
+  const f=d=>`${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]}) ${hm(d)}`;
+  return `${f(a)} 〜 ${f(b)}(${mins>=60?Math.floor(mins/60)+'時間'+(mins%60?mins%60+'分':''):mins+'分'})の間でランダムに投稿`;}
+function closeBulk(){BK=null;$('#bulkpanel').hidden=true;$('#bulkpanel').innerHTML='';}
+function drawBulk(){
+  const pn=$('#bulkpanel'),B=BK;if(!B)return;
+  let body='';
+  if(B.state==='form'){
+    const ps=PROFILES||[],q=B.q.toLowerCase(),list=ps.filter(p=>!q||p.name.toLowerCase().includes(q)||p.group.includes(q));
+    const groups=[...new Set(list.map(p=>p.group))];
+    const n=B.sel.size,total=n*B.per;
+    body=`<div class="field"><div class="row" style="justify-content:space-between;margin-bottom:6px"><div class="l" style="margin:0">アカウント(${n}件選択中)</div>
+        <div class="row"><button class="btn" id="ball" style="padding:4px 10px">表示中を全選択</button><button class="btn" id="bnone" style="padding:4px 10px">解除</button></div></div>
+      <input id="bq" type="text" placeholder="名前・グループで絞り込み" value="${esc(B.q)}"></div>
+      <div class="accs" style="max-height:260px;overflow:auto">${!PROFILES?'<div class="note">読み込み中…</div>':groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="checkbox" aria-checked="${B.sel.has(p.id)}" data-b="${p.id}"><span class="mark"></span>${esc(p.name)} ${sbBadge(p)}<span class="lastp">${esc(lastTxt(p))}</span></button>`).join('')}`).join('')}</div>
+      <div class="note" style="margin-top:8px">⚫=未判定 🟢=問題なし 🟡=注意(理由を併記) 🔴=規制の疑い(判定は上部の「🔍 シャドウバン判定」から)</div>
+      <div class="field" style="margin-top:14px"><div class="l">投稿する時間帯</div>
+        <div class="row" style="margin-bottom:8px"><span class="note" style="margin:0">日付</span>${dsel('bsd',B.sd)}</div>
+        <div class="row chipsrow" style="margin-bottom:8px"><span class="note" style="margin:0">よく使う時間帯</span>${BPRE.map(x=>`<button class="chip" data-pre="${x[0]}" aria-pressed="${B.preset===x[0]}">${x[0]} ${x[1]}〜${x[2]}</button>`).join('')}</div>
+        <div class="row"><span class="note" style="margin:0">細かく指定</span>${tsel('bst',B.st)} 〜 ${dsel('bed',B.ed)}${tsel('bet',B.et)}</div>
+        <div class="note" style="margin-top:6px">${esc(bSummary(B))}</div></div>
+      <div class="field"><div class="l">1アカウントあたりの投稿数</div><input type="number" id="bper" min="1" max="20" value="${B.per}" style="width:90px"></div>
+      <div class="note">作品はボードの中からランダムに選びます(同じアカウントで投稿・予約済みの作品は除外)。本文のリライトと動画加工も自動で行います。合計 <b>${total}</b> 件を、指定の時間帯の中でランダムな時刻に予約します。</div>
+      <div style="margin-top:14px"><button class="btn go block" id="brun" ${n&&new Date(bEnd(B))>new Date(bStart(B))?'':'disabled'}>${total}件を一括予約する</button></div>`;
+  }else if(B.state==='busy'){
+    const st=B.st||{total:0,done:0};
+    body=`<div class="result"><div class="spin" style="margin:12px auto"></div><h3>予約を作成中…</h3>
+      <div class="note">${st.done} / ${st.total||'?'} 件(リライトと動画加工に時間がかかります。この画面を閉じても処理は続きます)</div></div>`;
+  }else{
+    const st=B.st;
+    body=`<div class="result"><div style="font-size:42px">${st.errors.length&&!st.done?'⚠️':'✅'}</div><h3>${st.total-st.errors.length}件を予約しました</h3>
+      ${[...st.notes,...st.errors].map(x=>`<div class="note" style="color:var(--warn)">${esc(x)}</div>`).join('')}
+      <div class="row" style="justify-content:center;margin-top:16px"><button class="btn primary" id="bshow">予約一覧で確認・取り消し</button><button class="btn" id="bclose2">閉じる</button></div></div>`;
+  }
+  const oldAcc=pn.querySelector('.accs'),keepTop=oldAcc?oldAcc.scrollTop:0,oldContent=pn.querySelector('.content'),keepC=oldContent?oldContent.scrollTop:0;
+  pn.innerHTML=`<div class="sheet"><header><h2>一括予約</h2><button class="iconbtn" id="bclose" aria-label="閉じる">✕</button></header><div class="content">${body}</div></div>`;
+  const na=pn.querySelector('.accs');if(na)na.scrollTop=keepTop;const nc=pn.querySelector('.content');if(nc)nc.scrollTop=keepC;
+  $('#bclose').onclick=closeBulk;
+  const c2=$('#bclose2');if(c2)c2.onclick=closeBulk;
+  const sh=$('#bshow');if(sh)sh.onclick=()=>{closeBulk();openSched();};
+  pn.querySelectorAll('[data-b]').forEach(b=>b.onclick=()=>{B.sel.has(b.dataset.b)?B.sel.delete(b.dataset.b):B.sel.add(b.dataset.b);drawBulk();});
+  const bq=$('#bq');if(bq)bq.oninput=e=>{B.q=e.target.value;const pos=e.target.selectionStart;drawBulk();const n=$('#bq');n.focus();n.setSelectionRange(pos,pos);};
+  const vis=()=>(PROFILES||[]).filter(p=>!B.q||p.name.toLowerCase().includes(B.q.toLowerCase())||p.group.includes(B.q)).map(p=>p.id);
+  const ba=$('#ball');if(ba)ba.onclick=()=>{vis().forEach(i=>B.sel.add(i));drawBulk();};
+  const bn=$('#bnone');if(bn)bn.onclick=()=>{B.sel.clear();drawBulk();};
+  const bsd=$('#bsd');if(bsd)bsd.onchange=e=>{const old=B.sd;B.sd=e.target.value;
+    // 開始日を変えたら、終了日も同じ日数ぶんずらす(日をまたぐ設定を保つ)
+    const diff=(new Date(B.ed)-new Date(old))/864e5;const d=new Date(B.sd);d.setDate(d.getDate()+diff);B.ed=ymd(d);drawBulk();};
+  const bs=$('#bst');if(bs)bs.onchange=e=>{B.st=e.target.value;B.preset='';drawBulk();};
+  const be=$('#bed');if(be)be.onchange=e=>{B.ed=e.target.value;B.preset='';drawBulk();};
+  const bt=$('#bet');if(bt)bt.onchange=e=>{B.et=e.target.value;B.preset='';drawBulk();};
+  pn.querySelectorAll('[data-pre]').forEach(b=>b.onclick=()=>{applyPre(B,BPRE.find(x=>x[0]===b.dataset.pre));drawBulk();});
+  const bp=$('#bper');if(bp)bp.onchange=e=>{B.per=Math.min(20,Math.max(1,+e.target.value||1));drawBulk();};
+  const br=$('#brun');if(br)br.onclick=runBulk;
+}
+/* ===== シャドウバン判定 ===== */
+let SB=null;
+async function openSb(){
+  SB={sel:new Set(),q:'',busy:null};
+  $('#sbpanel').hidden=false;drawSb();
+  try{PROFILES=await api('/api/profiles');}catch(e){toast('アカウント一覧を取得できません: '+e.message,true);}
+  if(SB)drawSb();
+}
+function closeSb(){SB=null;$('#sbpanel').hidden=true;$('#sbpanel').innerHTML='';}
+function drawSb(){
+  const pn=$('#sbpanel'),B=SB;if(!B)return;
+  const ps=PROFILES||[],q=B.q.toLowerCase(),list=ps.filter(p=>!q||p.name.toLowerCase().includes(q)||p.group.includes(q));
+  const groups=[...new Set(list.map(p=>p.group))],n=B.sel.size;
+  const cnt=l=>ps.filter(p=>p.sb&&p.sb.level===l).length;
+  const oldAcc=pn.querySelector('.accs'),keep=oldAcc?oldAcc.scrollTop:0;
+  pn.innerHTML=`<div class="sheet"><header><h2>シャドウバン判定</h2><button class="iconbtn" id="sbclose" aria-label="閉じる">✕</button></header><div class="content">
+    <div class="note" style="margin-top:0">🟢 ${cnt('ok')} / 🟡 ${cnt('warn')} / 🔴 ${cnt('bad')} / ⚪ ${cnt('unknown')} / ⚫ 未判定 ${ps.filter(p=>!p.sb).length}</div>
+    <div class="field"><div class="row" style="justify-content:space-between;margin-bottom:6px"><div class="l" style="margin:0">アカウント(${n}件選択中)</div>
+      <div class="row"><button class="btn" id="sball" style="padding:4px 10px">表示中を全選択</button><button class="btn" id="sbunj" style="padding:4px 10px">未判定だけ選択</button><button class="btn" id="sbnone" style="padding:4px 10px">解除</button></div></div>
+      <input id="sbq" type="text" placeholder="名前・グループで絞り込み" value="${esc(B.q)}"></div>
+    <div class="accs" style="max-height:340px;overflow:auto">${!PROFILES?'<div class="note">読み込み中…</div>':groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="checkbox" aria-checked="${B.sel.has(p.id)}" data-sb="${p.id}"><span class="mark"></span>${esc(p.name)} ${sbBadge(p)}<span class="lastp">${p.sb?esc('判定 '+p.sb.checked_at.slice(5,16).replace('T',' ')):''}</span></button>`).join('')}`).join('')}</div>
+    <div style="margin-top:14px"><button class="btn go block" id="sbrun" ${n&&!B.busy?'':'disabled'}>${B.busy?`判定中 ${B.busy.done}/${B.busy.total}…`:`${n}件をシャドウバン判定する`}</button>
+    <div class="note" style="text-align:center">1件あたり約20秒かかります。判定は Xdeck が、対象とは別のアカウントの通信で行います。この画面を閉じても処理は続きます。</div></div></div></div>`;
+  const na=pn.querySelector('.accs');if(na)na.scrollTop=keep;
+  $('#sbclose').onclick=closeSb;
+  pn.querySelectorAll('[data-sb]').forEach(b=>b.onclick=()=>{B.sel.has(b.dataset.sb)?B.sel.delete(b.dataset.sb):B.sel.add(b.dataset.sb);drawSb();});
+  const vis=()=>list.map(p=>p.id);
+  $('#sball').onclick=()=>{vis().forEach(i=>B.sel.add(i));drawSb();};
+  $('#sbunj').onclick=()=>{B.sel.clear();list.filter(p=>!p.sb).forEach(p=>B.sel.add(p.id));drawSb();};
+  $('#sbnone').onclick=()=>{B.sel.clear();drawSb();};
+  $('#sbq').oninput=e=>{B.q=e.target.value;const pos=e.target.selectionStart;drawSb();const t=$('#sbq');t.focus();t.setSelectionRange(pos,pos);};
+  $('#sbrun').onclick=runSb;
+}
+async function runSb(){
+  const B=SB;if(!B||!B.sel.size||B.busy)return;
+  try{
+    const o=await api('/api/shadowban',{method:'POST',body:JSON.stringify({profile_ids:[...B.sel]})});
+    B.busy={done:0,total:B.sel.size};drawSb();
+    for(;;){
+      await new Promise(r=>setTimeout(r,3000));
+      const st=await api('/api/shadowban/'+o.job);
+      B.busy={done:st.done,total:st.total};
+      PROFILES=await api('/api/profiles');
+      if(st.state!=='running')break;
+      if(SB===B)drawSb();
+    }
+    toast('シャドウバン判定が完了しました ✓');
+    if(SB===B){B.busy=null;B.sel.clear();drawSb();}
+  }catch(e){if(SB===B){B.busy=null;drawSb();}toast('判定に失敗: '+e.message,true);}
+}
+$('#sbbtn').onclick=openSb;
+$('#sbpanel').addEventListener('click',e=>{if(e.target.id==='sbpanel')closeSb();});
+async function runBulk(){
+  const B=BK;if(!B||B.sel.size===0)return;
+  try{
+    const o=await api('/api/bulk',{method:'POST',body:JSON.stringify({profile_ids:[...B.sel],start:bStart(B),end:bEnd(B),per:B.per})});
+    B.state='busy';B.st={total:0,done:0};drawBulk();
+    for(;;){
+      await new Promise(r=>setTimeout(r,2000));
+      if(BK!==B){refreshSchedCount();return;}
+      const st=await api('/api/bulk/'+o.job);B.st=st;
+      if(st.state!=='running'){B.state='done';break;}
+      drawBulk();
+    }
+    refreshSchedCount();drawBulk();
+  }catch(e){if(BK===B){B.state='form';drawBulk();}toast('失敗: '+e.message,true);}
+}
+$('#bulkbtn').onclick=openBulk;
+$('#bulkpanel').addEventListener('click',e=>{if(e.target.id==='bulkpanel')closeBulk();});
 let SCHED=[];
-const SLBL={pending:['busy','予約中'],running:['busy','投稿中'],done:['ok','投稿済み'],failed:['err','失敗'],missed:['err','見送り(時刻に停止中)']};
+const SLBL={pending:['wait','🕒 待機中(時刻になると投稿)'],running:['busy','投稿中'],done:['ok','投稿済み'],failed:['err','失敗'],missed:['err','見送り(時刻に停止中)']};
 async function refreshSchedCount(){
   try{SCHED=await api('/api/schedule');}catch(e){return;}
   const n=SCHED.filter(x=>x.status==='pending'||x.status==='running').length;
   $('#schedbtn').textContent='🕒 予約'+(n?` (${n})`:'');
   if(!$('#schedpanel').hidden)drawSched();
 }
+function remain(at){const m=Math.round((new Date(at)-Date.now())/6e4);
+  if(m<=0)return 'まもなく';if(m<60)return `あと${m}分`;const h=Math.floor(m/60);return h<24?`あと${h}時間${m%60}分`:`あと${Math.floor(h/24)}日${h%24}時間`;}
 function openSched(){$('#schedpanel').hidden=false;drawSched();refreshSchedCount();}
 function closeSched(){$('#schedpanel').hidden=true;}
 function drawSched(){
   const pn=$('#schedpanel');
   const rows=SCHED.map(x=>{const st=SLBL[x.status]||['',x.status];
-    return `<div class="srow"><div class="when">${esc(fmtAt(x.at))}</div><div class="main"><b>${esc(x.profile_name)}</b> ${badge(st[0],esc(st[1]))}
+    return `<div class="srow"><div class="when">${esc(fmtAt(x.at))}${x.status==='pending'?`<div class="note" style="margin:2px 0 0">${esc(remain(x.at))}</div>`:''}</div><div class="main"><b>${esc(x.profile_name)}</b> ${badge(st[0],esc(st[1]))}
       <div class="stx">${esc(x.text)}</div>${x.error?`<div class="note" style="color:var(--err)">${esc(x.error)}</div>`:''}
       ${x.link?`<a href="${esc(x.link)}" target="_blank" rel="noopener">X で開く</a>`:''}</div>
       <button class="btn sdel" data-s="${esc(x.id)}" ${x.status==='running'?'disabled':''}>${x.status==='pending'?'取り消す':'削除'}</button></div>`;}).join('');
@@ -504,7 +670,7 @@ function drawSched(){
 $('#schedbtn').onclick=openSched;
 $('#schedpanel').addEventListener('click',e=>{if(e.target.id==='schedpanel')closeSched();});
 setInterval(refreshSchedCount,30000);refreshSchedCount();
-document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!$('#schedpanel').hidden)closeSched();else if(!$('#modal').hidden)closePost();else if(openId)closeDrawer();});
+document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!$('#sbpanel').hidden)closeSb();else if(!$('#bulkpanel').hidden)closeBulk();else if(!$('#schedpanel').hidden)closeSched();else if(!$('#modal').hidden)closePost();else if(openId)closeDrawer();});
 drawChips();
 // URL から直接開ける: #w=作品ID / #post=作品ID&step=2
 load().then(()=>{
