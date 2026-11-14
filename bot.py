@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -30,9 +31,31 @@ def load_env() -> None:
 
 load_env()
 TOKEN = os.environ["DISCORD_BOT_TOKEN"]
-SAVE_DIR = Path(os.environ.get("SAVE_DIR", Path(__file__).parent / "saved"))
-# 空なら全チャンネル。カンマ区切りでチャンネルIDを指定すると限定できる
-CHANNEL_IDS = {int(x) for x in os.environ.get("CHANNEL_IDS", "").split(",") if x.strip()}
+# ボード種別: `python bot.py` = 普通用 / `python bot.py ent` = エンタメ用
+ENT = len(sys.argv) > 1 and sys.argv[1] == "ent"
+BOARD_NAME = "エンタメ" if ENT else "普通"
+ENT_WORD = "エンタメ"  # グループ名にこれを含むアカウントはエンタメ用
+
+
+def _ids(key: str) -> set[int]:
+    return {int(x) for x in os.environ.get(key, "").split(",") if x.strip()}
+
+
+ENT_CHANNELS = _ids("CHANNEL_IDS_ENT")
+if ENT:
+    SAVE_DIR = Path(os.environ.get("SAVE_DIR_ENT", Path(__file__).parent / "saved_ent"))
+    CHANNEL_IDS = ENT_CHANNELS
+    if not CHANNEL_IDS:
+        sys.exit("エンタメ用ボードには .env に CHANNEL_IDS_ENT=<チャンネルID> が必要です")
+else:
+    SAVE_DIR = Path(os.environ.get("SAVE_DIR", Path(__file__).parent / "saved"))
+    # 空なら全チャンネル(エンタメ用チャンネルは除く)
+    CHANNEL_IDS = _ids("CHANNEL_IDS")
+
+
+def group_ok(group: str) -> bool:
+    """このボードから投稿してよいグループか"""
+    return (ENT_WORD in group) == ENT
 
 URL_RE = re.compile(r"https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/(\w+)/status/(\d+)")
 
@@ -85,9 +108,8 @@ def xdeck(method: str, path: str, **kw) -> dict:
 
 
 def rewrite_text(text: str, urls: list[str] | None = None) -> list[str]:
-    """Claude Code (claude -p) で本文を強めにリライトし、書き方の違う3案を返す。URLは書き換えず元のまま付け直す。"""
+    """Claude Code (claude -p) で本文を強めにリライトし、書き方の違う3案を返す。リンクは本文に含めない。"""
     import random
-    found = re.findall(r"https?://\S+", text)
     body = re.sub(r"https?://\S+", "", text).strip()
     if not body:
         return [text]
@@ -124,8 +146,35 @@ def rewrite_text(text: str, urls: list[str] | None = None) -> list[str]:
         cands = [out]  # JSONで返らなかったときは、全体を1案として扱う
     if not cands:
         raise RuntimeError("リライト結果が空でした")
-    # 元のURLを、そのまま末尾に戻す
-    return [c + ("\n" + "\n".join(found) if found else "") for c in cands]
+    # 本文にリンクは入れない(元の文にURLがあっても外す)
+    return [re.sub(r"\s*https?://\S+", "", c).strip() for c in cands]
+
+
+def video_duration(path: Path) -> float:
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+    return float(r.stdout.strip())
+
+
+def edit_video(src: Path, dest: Path, crop: float, brightness: float, contrast: float, saturation: float,
+               head: float = 0.0, tail: float = 0.0) -> None:
+    """四辺を crop(0〜0.1 の割合)ずつ切り抜き、明るさ・コントラスト・彩度を調整し、前後を head/tail 秒カットして再エンコード。"""
+    crop = min(max(crop, 0.0), 0.10)
+    keep = 1 - 2 * crop
+    vf = (f"crop=trunc(iw*{keep:.4f}/2)*2:trunc(ih*{keep:.4f}/2)*2,"
+          f"eq=brightness={min(max(brightness, -0.3), 0.3):.3f}:contrast={min(max(contrast, 0.5), 2.0):.3f}"
+          f":saturation={min(max(saturation, 0.0), 3.0):.3f}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    trim = []
+    if head > 0 or tail > 0:
+        dur = video_duration(src)
+        if dur - head - tail >= 1.0:  # 短すぎる動画は秒数カットしない
+            trim = ["-ss", f"{head:.3f}", "-t", f"{dur - head - tail:.3f}"]
+    cmd = ["ffmpeg", "-y", "-i", str(src), *trim, "-vf", vf, "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(dest)]
+    res = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=600)
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr.strip().splitlines()[-1] if res.stderr else "ffmpeg failed")
 
 
 def make_thumb(src: Path, dest: Path) -> None:
@@ -194,11 +243,17 @@ def save_tweet(user: str, tweet_id: str, work_id: str) -> tuple[Path, list[Path]
     return folder, videos, tw
 
 
-PORT = int(os.environ.get("GALLERY_PORT", "8765"))
+PORT = int(os.environ.get("GALLERY_PORT_ENT", "8766")) if ENT else int(os.environ.get("GALLERY_PORT", "8765"))
 GALLERY_URL = f"http://localhost:{PORT}"
 
 def page() -> str:
-    return (Path(__file__).parent / "ui.html").read_text(encoding="utf-8")
+    html = (Path(__file__).parent / "ui.html").read_text(encoding="utf-8")
+    html = html.replace("__BN__", "(エンタメ)" if ENT else "")
+    pn = os.environ.get("GALLERY_PORT", "8765")
+    pe = os.environ.get("GALLERY_PORT_ENT", "8766")
+    cur = 'aria-current="page"'
+    return (html.replace("__P_N__", pn).replace("__P_E__", pe)
+            .replace("__A_N__", "" if ENT else cur).replace("__A_E__", cur if ENT else ""))
 
 
 def list_items():
@@ -294,7 +349,8 @@ async def start_web():
         groups = (await asyncio.to_thread(xdeck, "GET", "group/list"))["data"]["list"]
         gname = {g["group_id"]: g["name"] for g in groups}
         return web.json_response([
-            {"id": x["profile_id"], "name": x["name"], "group": gname.get(x["group_id"], "")} for x in prof])
+            {"id": x["profile_id"], "name": x["name"], "group": gname.get(x["group_id"], "")}
+            for x in prof if group_ok(gname.get(x["group_id"], ""))])
 
     async def api_rewrite(req):
         body = await req.json()
@@ -311,6 +367,12 @@ async def start_web():
         files = body.get("files") or []
         if not profile_id or not text:
             raise web.HTTPBadRequest(text="profile_id and text are required")
+        prof = (await asyncio.to_thread(xdeck, "GET", "profile/list"))["data"]["list"]
+        groups = (await asyncio.to_thread(xdeck, "GET", "group/list"))["data"]["list"]
+        gname = {g["group_id"]: g["name"] for g in groups}
+        target = next((x for x in prof if x["profile_id"] == profile_id), None)
+        if not target or not group_ok(gname.get(target["group_id"], "")):
+            raise web.HTTPBadRequest(text=f"このアカウントは{BOARD_NAME}ボードからは投稿できません")
         paths = []
         for f in files:
             orig = safe_path(f["id"], f["name"])
@@ -440,8 +502,10 @@ async def on_message(msg: discord.Message):
     channel_id = msg.channel.parent_id if in_thread else msg.channel.id
     if CHANNEL_IDS and channel_id not in CHANNEL_IDS:
         return
+    if not ENT and channel_id in ENT_CHANNELS:
+        return
     m = URL_RE.search(msg.content)
-    work_urls = find_work_urls(msg.content)
+    work_urls = [] if ENT else find_work_urls(msg.content)  # エンタメ用は作品URLなし
     # スレッド外の MyFans/FANZA だけの投稿は、紐づけ先の作品がないので無視
     if not m and not (work_urls and in_thread):
         return
