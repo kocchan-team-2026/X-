@@ -1,12 +1,14 @@
 """Discord に投げた X(Twitter) のリンクを検知し、本文・画像・動画をローカル保存する Bot。
 動画は保存後に macOS のクリップボードへファイルとしてコピーする (Cmd+V で貼り付け可能)。
 """
+import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import discord
@@ -212,7 +214,7 @@ def already_saved(work_id: str, tweet_id: str) -> bool:
     return False
 
 
-def save_tweet(user: str, tweet_id: str, work_id: str) -> tuple[Path, list[Path], dict]:
+def save_tweet(user: str, tweet_id: str, work_id: str, src: dict | None = None) -> tuple[Path, list[Path], dict]:
     res = requests.get(f"https://api.fxtwitter.com/{user}/status/{tweet_id}", timeout=30)
     res.raise_for_status()
     tw = res.json()["tweet"]
@@ -223,6 +225,7 @@ def save_tweet(user: str, tweet_id: str, work_id: str) -> tuple[Path, list[Path]
     (folder / "meta.json").write_text(json.dumps({
         "work_id": work_id, "tweet_id": tweet_id,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
+        **({"discord": src} if src else {}),  # どのDiscordメッセージ/スレッドから来たか(確認用)
     }), encoding="utf-8")
     (folder / "tweet.json").write_text(json.dumps(tw, ensure_ascii=False, indent=2), encoding="utf-8")
     (folder / "text.md").write_text(
@@ -278,6 +281,7 @@ def list_items():
                 saved_at = datetime.fromtimestamp(d.stat().st_mtime).isoformat(timespec="seconds")
         post = {
             "saved_at": saved_at,
+            "discord": meta.get("discord"),
             "id": d.name,
             "author": f"{tw['author']['name']} (@{tw['author']['screen_name']})",
             "text": tw.get("text", ""),
@@ -309,6 +313,95 @@ def safe_path(item_id: str, name: str) -> Path:
     if SAVE_DIR.resolve() not in p.parents or not p.is_file():
         raise web.HTTPNotFound()
     return p
+
+
+SCHED_LOCK = asyncio.Lock()
+SCHED_GRACE_MIN = 30  # 予約時刻をこれ以上過ぎていたら(Bot停止中など)投稿せず「見送り」にする
+
+
+def sched_file() -> Path:
+    return SAVE_DIR / "_schedule.json"
+
+
+def load_sched() -> list[dict]:
+    f = sched_file()
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
+
+
+def save_sched(items: list[dict]) -> None:
+    tmp = sched_file().with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(sched_file())
+
+
+async def send_post(work_id: str, profile_id: str, text: str, paths: list[str]) -> dict:
+    payload = {"kind": "post", "profile_ids": [profile_id], "text": text}
+    if paths:
+        payload["media_paths"] = paths
+    log = {"at": datetime.now().isoformat(timespec="seconds"), "work_id": work_id, "profile_id": profile_id,
+           "text": text, "media": paths}
+
+    def write_log(extra):
+        with open(SAVE_DIR / "_posts.log", "a", encoding="utf-8") as lf:
+            lf.write(json.dumps({**log, **extra}, ensure_ascii=False) + "\n")
+
+    write_log({"event": "request"})  # 先に記録(失敗しても何を送ったか残る)
+    # Xdeck は投稿完了まで応答を返さないことがある(30秒前後)ので長めに待つ
+    res = await asyncio.to_thread(xdeck, "POST", "x/bulk", json=payload, timeout=300)
+    write_log({"event": "response", "response": res})
+    return res
+
+
+async def run_due_posts() -> None:
+    now = datetime.now()
+    async with SCHED_LOCK:
+        items = load_sched()
+        due = [x for x in items if x["status"] == "pending" and datetime.fromisoformat(x["at"]) <= now]
+        for x in due:
+            if now - datetime.fromisoformat(x["at"]) > timedelta(minutes=SCHED_GRACE_MIN):
+                x["status"] = "missed"
+            else:
+                x["status"] = "running"
+        if due:
+            save_sched(items)
+    for x in [d for d in due if d["status"] == "running"]:
+        result: dict = {}
+        try:
+            res = await send_post(x["work_id"], x["profile_id"], x["text"], x["media"])
+            if res.get("code") != 0:
+                raise RuntimeError(res.get("msg") or str(res))
+            jid = (res.get("data") or {}).get("job_id")
+            job = {}
+            for _ in range(30):
+                job = ((await asyncio.to_thread(xdeck, "GET", "x/bulk/status", params={"job_id": jid, "id": jid})).get("data")) or {}
+                if str(job.get("state")).lower() in ("done", "failed", "error", "finished", "completed"):
+                    break
+                await asyncio.sleep(2)
+            if job.get("failed", 0) > 0 or str(job.get("state")).lower() in ("failed", "error"):
+                raise RuntimeError(job.get("error") or "Xdeck 側で投稿に失敗しました")
+            label = ((job.get("steps") or [{}])[0].get("label") or "").replace("@", "")
+            if label and job.get("tweet_id"):
+                result["link"] = f"https://x.com/{label}/status/{job['tweet_id']}"
+            status = "done"
+        except Exception as e:  # noqa: BLE001
+            status, result["error"] = "failed", str(e)[:300]
+        async with SCHED_LOCK:
+            items = load_sched()
+            for y in items:
+                if y["id"] == x["id"]:
+                    y.update(result, status=status, finished=datetime.now().isoformat(timespec="seconds"))
+            save_sched(items)
+        if status == "done":
+            shutil.rmtree(SAVE_DIR / "_sched" / x["id"], ignore_errors=True)
+
+
+async def scheduler_loop() -> None:
+    while True:
+        try:
+            await run_due_posts()
+        except Exception as e:  # noqa: BLE001
+            print("scheduler error:", e)
+        await asyncio.sleep(20)
 
 
 async def start_web():
@@ -360,8 +453,8 @@ async def start_web():
         cands = await asyncio.to_thread(rewrite_text, text)
         return web.json_response({"text": cands[0], "candidates": cands})
 
-    async def api_post(req):
-        body = await req.json()
+    async def build_post(body):
+        """投稿内容を検証して (profile_id, text, paths) を返す"""
         text = (body.get("text") or "").strip()
         profile_id = body.get("profile_id") or ""
         files = body.get("files") or []
@@ -384,21 +477,57 @@ async def start_web():
                 paths.append(str(ed))
             else:
                 paths.append(str(orig))
-        payload = {"kind": "post", "profile_ids": [profile_id], "text": text}
-        if paths:
-            payload["media_paths"] = paths
-        log = {"at": datetime.now().isoformat(timespec="seconds"), "work_id": body.get("work_id", ""), "profile_id": profile_id,
-               "text": text, "media": paths}
+        return profile_id, text, target["name"], paths
 
-        def write_log(extra):
-            with open(SAVE_DIR / "_posts.log", "a", encoding="utf-8") as lf:
-                lf.write(json.dumps({**log, **extra}, ensure_ascii=False) + "\n")
-
-        write_log({"event": "request"})  # 先に記録(失敗しても何を送ったか残る)
-        # Xdeck は投稿完了まで応答を返さないことがある(30秒前後)ので長めに待つ
-        res = await asyncio.to_thread(xdeck, "POST", "x/bulk", json=payload, timeout=300)
-        write_log({"event": "response", "response": res})
+    async def api_post(req):
+        body = await req.json()
+        profile_id, text, _name, paths = await build_post(body)
+        res = await send_post(body.get("work_id", ""), profile_id, text, paths)
         return web.json_response(res)
+
+    # ---- 予約投稿 ----
+    async def api_sched_add(req):
+        body = await req.json()
+        try:
+            at = datetime.fromisoformat(str(body.get("at", "")))
+        except ValueError:
+            raise web.HTTPBadRequest(text="日時の形式が正しくありません")
+        if at <= datetime.now():
+            raise web.HTTPBadRequest(text="予約日時は現在より後にしてください")
+        profile_id, text, pname, paths = await build_post(body)
+        sid = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + os.urandom(3).hex()
+        # 加工済み動画は後から作り直されても変わらないよう、予約時点のコピーを保持する
+        snap = SAVE_DIR / "_sched" / sid
+        snap.mkdir(parents=True, exist_ok=True)
+        kept = []
+        for src in paths:
+            dst = snap / Path(src).name
+            await asyncio.to_thread(shutil.copy2, src, dst)
+            kept.append(str(dst))
+        e = {"id": sid, "at": at.isoformat(timespec="minutes"), "status": "pending",
+             "work_id": body.get("work_id", ""), "profile_id": profile_id, "profile_name": pname,
+             "text": text, "media": kept, "created": datetime.now().isoformat(timespec="seconds")}
+        async with SCHED_LOCK:
+            items = load_sched()
+            items.append(e)
+            save_sched(items)
+        return web.json_response(e)
+
+    async def api_sched_list(_):
+        return web.json_response(sorted(load_sched(), key=lambda x: x["at"]))
+
+    async def api_sched_del(req):
+        sid = req.match_info["sid"]
+        async with SCHED_LOCK:
+            items = load_sched()
+            hit = next((x for x in items if x["id"] == sid), None)
+            if not hit:
+                raise web.HTTPNotFound()
+            if hit["status"] == "running":
+                raise web.HTTPConflict(text="投稿処理中のため取り消せません")
+            save_sched([x for x in items if x["id"] != sid])
+        shutil.rmtree(SAVE_DIR / "_sched" / sid, ignore_errors=True)
+        return web.json_response({"ok": True})
 
     async def api_edit(req):
         b = await req.json()
@@ -450,6 +579,18 @@ async def start_web():
                                 "job_id": (e.get("response", {}).get("data") or {}).get("job_id")})
         return web.json_response(out[::-1])
 
+    async def api_move(req):
+        """保存済みの投稿を別の作品に移す。to が空なら新しい作品として分ける"""
+        b = await req.json()
+        d = SAVE_DIR / str(b.get("id", ""))
+        mf = d / "meta.json"
+        if "/" in str(b.get("id", "")) or not mf.is_file():
+            raise web.HTTPNotFound()
+        meta = json.loads(mf.read_text(encoding="utf-8"))
+        meta["work_id"] = str(b.get("to") or "") or "split-" + datetime.now().strftime("%Y%m%d%H%M%S") + "-" + os.urandom(2).hex()
+        mf.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        return web.json_response({"work_id": meta["work_id"]})
+
     async def api_job(req):
         jid = req.match_info["job"]
         res = await asyncio.to_thread(xdeck, "GET", "x/bulk/status", params={"job_id": jid, "id": jid})
@@ -465,7 +606,8 @@ async def start_web():
         web.get("/thumb/{id}/{name}", thumb), web.get("/api/history/{work}", api_history),
         web.post("/api/edit", api_edit), web.get("/edited/{id}/{name}", edited_file),
         web.get("/api/profiles", api_profiles), web.post("/api/rewrite", api_rewrite),
-        web.post("/api/post", api_post), web.get("/api/job/{job}", api_job),
+        web.post("/api/post", api_post), web.post("/api/move", api_move), web.get("/api/schedule", api_sched_list),
+        web.post("/api/schedule", api_sched_add), web.delete("/api/schedule/{sid}", api_sched_del), web.get("/api/job/{job}", api_job),
     ])
     runner = web.AppRunner(app)
     await runner.setup()
@@ -482,6 +624,7 @@ class Bot(discord.Client):
     async def setup_hook(self):
         SAVE_DIR.mkdir(parents=True, exist_ok=True)
         await start_web()
+        self.sched_task = asyncio.create_task(scheduler_loop())
 
 
 client = Bot(intents=intents)
@@ -523,7 +666,9 @@ async def on_message(msg: discord.Message):
             if await asyncio.to_thread(already_saved, work_id, m.group(2)):
                 notes.append("X投稿は保存済み")
             else:
-                folder, videos, tw = await asyncio.to_thread(save_tweet, m.group(1), m.group(2), work_id)
+                folder, videos, tw = await asyncio.to_thread(
+                    save_tweet, m.group(1), m.group(2), work_id,
+                    {"url": msg.jump_url, "thread": msg.channel.name if in_thread else None})
                 notes.append("X投稿を保存")
         await msg.add_reaction("✅" if (tw or work_urls) else "♻️")
         summary = " / ".join(notes) or "変更なし"
