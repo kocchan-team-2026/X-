@@ -4,3 +4,4 @@ saved/
 __pycache__/
 *.pyc
 .DS_Store
+saved_ent/
