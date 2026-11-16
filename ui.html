@@ -546,10 +546,9 @@ async function submitPost(){
 /* ===== 一括予約 ===== */
 let BK=null;
 async function openBulk(){
-  const t=new Date(Date.now()+3600e3);t.setMinutes(t.getMinutes()<30?30:60,0,0);
-  const day=ymd(new Date());
-  BK={sel:new Set(),q:'',sd:day,st:hm(t),ed:day,et:'23:30',per:1,state:'form',preset:''};
-  if(BK.st>=BK.et){BK.sd=BK.ed=ymd(new Date(Date.now()+864e5));BK.st='10:00';BK.et='22:00';}
+  // 投稿する時間帯の初期値: 開始=今の時刻、終了=その2時間後(日をまたぐ場合は終了日も翌日)
+  const t=new Date(),e=new Date(t.getTime()+2*3600e3);
+  BK={sel:new Set(),q:'',sd:ymd(t),st:hm(t),ed:ymd(e),et:hm(e),per:1,state:'form',preset:''};
   $('#bulkpanel').hidden=false;drawBulk();
   try{await profiles();}catch(e){toast('アカウント一覧を取得できません: '+e.message,true);}
   if(BK)drawBulk();
@@ -565,7 +564,7 @@ const bStart=B=>`${B.sd}T${B.st}`,bEnd=B=>`${B.ed}T${B.et}`;
 function applyPre(B,pre){B.preset=pre[0];B.st=pre[1];B.ed=B.sd;
   if(pre[2]==='24:00'){B.et='00:00';const d=new Date(B.sd+'T00:00');d.setDate(d.getDate()+1);B.ed=ymd(d);}else B.et=pre[2];}
 function dsel(id,val){return `<select id="${id}" class="tsel">${dayOpts().map(o=>`<option value="${o.v}" ${o.v===val?'selected':''}>${o.l}</option>`).join('')}</select>`;}
-function tsel(id,val){return `<select id="${id}" class="tsel">${TIMES.map(t=>`<option ${t===val?'selected':''}>${t}</option>`).join('')}</select>`;}
+function tsel(id,val){const ts=TIMES.includes(val)?TIMES:[...TIMES,val].sort();return `<select id="${id}" class="tsel">${ts.map(t=>`<option ${t===val?'selected':''}>${t}</option>`).join('')}</select>`;}
 function bSummary(B){const a=new Date(bStart(B)),b=new Date(bEnd(B)),mins=(b-a)/6e4;
   if(!(mins>0))return '⚠ 終了は開始より後にしてください';
   const f=d=>`${d.getMonth()+1}/${d.getDate()}(${WD[d.getDay()]}) ${hm(d)}`;

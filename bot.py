@@ -795,10 +795,12 @@ def fu_save(d: dict) -> None:
     FOLLOWUP_FILE().write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def posted_tweets() -> dict[str, dict]:
-    """このボードから投稿した {tweet_id: {work_id, profile_id}}(即時投稿の記録 + 予約投稿の完了分)"""
+def posted_tweets(d: Path | None = None) -> dict[str, dict]:
+    """このボードから投稿した {tweet_id: {work_id, profile_id, at}}(即時投稿の記録 + 予約投稿の完了分)。
+    d を渡すと別ボード(保存先フォルダ)の分を返す"""
+    d = d or SAVE_DIR
     out: dict[str, dict] = {}
-    f = SAVE_DIR / "_posts.log"
+    f = d / "_posts.log"
     if f.exists():
         for line in f.read_text(encoding="utf-8").splitlines():
             try:
@@ -808,12 +810,44 @@ def posted_tweets() -> dict[str, dict]:
             r = e.get("response") or {}
             tid = str((r.get("data") or {}).get("tweet_id") or "")
             if e.get("event") == "response" and r.get("code") == 0 and tid:
-                out[tid] = {"work_id": e.get("work_id", ""), "profile_id": e.get("profile_id", "")}
-    for x in load_sched():
+                out[tid] = {"work_id": e.get("work_id", ""), "profile_id": e.get("profile_id", ""), "at": e.get("at", "")}
+    sf = d / "_schedule.json"
+    for x in (json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else []):
         m = re.search(r"/status/(\d+)", x.get("link") or "")
         if x["status"] == "done" and m:
-            out[m.group(1)] = {"work_id": x["work_id"], "profile_id": x["profile_id"]}
+            out[m.group(1)] = {"work_id": x["work_id"], "profile_id": x["profile_id"], "at": x.get("finished") or x["at"]}
     return out
+
+
+NORMAL_SAVE_DIR = Path(os.environ.get("SAVE_DIR", Path(__file__).parent / "saved"))
+FOLLOWUP_TEXT_ENT = os.environ.get("FOLLOWUP_TEXT_ENT", "おすすめです〜")  # エンタメ用:1つ目のリプ本文
+RECOMMEND_N = int(os.environ.get("RECOMMEND_N", "3"))  # おすすめとして貼る普通用投稿の数
+
+
+def recent_normal_urls(n: int = RECOMMEND_N) -> list[str]:
+    """普通用ボードで最近投稿した投稿のURLを新しい順にn件(なるべく別アカウントから選ぶ)"""
+    rows = sorted(posted_tweets(NORMAL_SAVE_DIR).items(), key=lambda kv: kv[1]["at"], reverse=True)
+    picked: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for tid, m in rows:  # まず別アカウントを優先
+        if m["profile_id"] not in seen and len(picked) < n:
+            seen.add(m["profile_id"])
+            picked.append((tid, m["profile_id"]))
+    for tid, m in rows:  # 足りなければ同じアカウントの新しい順で補う
+        if len(picked) >= n:
+            break
+        if all(tid != p[0] for p in picked):
+            picked.append((tid, m["profile_id"]))
+    names: dict[str, str] = {}
+    urls = []
+    for tid, pid in picked:
+        if pid not in names:
+            try:
+                names[pid] = xdeck("GET", "x/get", params={"profile_id": pid})["data"]["profile"]["screenName"]
+            except Exception:  # noqa: BLE001
+                names[pid] = "i"  # x.com/i/status/ID でも開ける
+        urls.append(f"https://x.com/{names[pid]}/status/{tid}")
+    return urls
 
 
 def work_affiliate(wid: str) -> str:
@@ -848,7 +882,7 @@ async def post_followup(profile_id: str, tweet_id: str, text: str) -> str:
 
 
 async def run_followups() -> None:
-    """インプ達成(Xdeck のインプ通知が reached)した投稿に、同じアカウントから「続きです〜」をリプし、そのリプにアフィリエイトリンクをリプする"""
+    """インプ達成(Xdeck のインプ通知が reached)した投稿に、同じアカウントから1つ目のリプ(普通用=「続きです〜」/エンタメ用=「おすすめです〜」)を出し、\n    続けてリンクを1件ずつリプでつなげる(普通用=アフィリエイトリンク/エンタメ用=普通用の最近の投稿URL3件)"""
     alerts = (await asyncio.to_thread(xdeck, "GET", "imp-alerts/list"))["data"]["alerts"]
     reached = [a for a in alerts if a.get("status") == "reached"]
     st = fu_load()
@@ -873,27 +907,49 @@ async def run_followups() -> None:
             continue
         s = st.setdefault(tid, {"state": "waiting", "tries": 0})
         reached_at = datetime.fromtimestamp((a.get("reachedAt") or 0) / 1000)
-        url = await asyncio.to_thread(work_affiliate, m["work_id"])
-        if not url:
+        if ENT:  # エンタメ用: 普通用の最近の投稿URLをおすすめとして1件ずつ貼る
+            links = await asyncio.to_thread(recent_normal_urls)
+            first = FOLLOWUP_TEXT_ENT
+            lack = "普通用の投稿が見つかりません"
+        else:    # 普通用: 作品のアフィリエイトリンクを貼る
+            url = await asyncio.to_thread(work_affiliate, m["work_id"])
+            links = [url] if url else []
+            first = FOLLOWUP_TEXT
+            lack = "作品にアフィリエイトリンクが未登録"
+        if not links:
             s["state"] = "waiting"
-            s["note"] = "作品にアフィリエイトリンクが未登録"
+            s["note"] = lack
             if datetime.now() - reached_at > timedelta(hours=FOLLOWUP_WINDOW_H):
                 s["state"] = "gave_up"
             continue
         try:
-            # ①元ツイートに「続きです〜」→ ②そのリプにリンクをリプ(①の投稿済みは再試行時にやり直さない)
-            if not s.get("reply1"):
-                s["reply1"] = await post_followup(m["profile_id"], tid, FOLLOWUP_TEXT)
-                if not s["reply1"]:
-                    s.update(state="gave_up", error="「続きです」のIDを取得できず、リンクのリプができませんでした")
+            # 元ツイート →「続きです〜/おすすめです〜」→ リンク1 → リンク2 … と1件ずつ返信をつなげる。
+            # 投稿済みの分は chain に残し、再試行時にやり直さない
+            chain = s.setdefault("chain", [])
+            if s.get("reply1") and not chain:  # 旧形式の記録からの引き継ぎ
+                chain.append(s["reply1"])
+            if not chain:
+                rid = await post_followup(m["profile_id"], tid, first)
+                if not rid:
+                    s.update(state="gave_up", error="1つ目のリプのIDを取得できず、リンクのリプができませんでした")
                     fu_save(st)
                     continue
+                chain.append(rid)
+                s["reply1"] = rid
                 fu_save(st)
-            await post_followup(m["profile_id"], s["reply1"], url)
-            s.update(state="done", at=datetime.now().isoformat(timespec="seconds"), work_id=m["work_id"], url=url)
-            s.pop("note", None)
-            s.pop("error", None)
-            print(f"followup: {tid} にリプしました")
+            for link in links[len(chain) - 1:]:
+                rid = await post_followup(m["profile_id"], chain[-1], link)
+                if not rid:
+                    s.update(state="gave_up", error="リプのIDを取得できず、続きのリンクをつなげられませんでした")
+                    break
+                chain.append(rid)
+                fu_save(st)
+            else:
+                s.update(state="done", at=datetime.now().isoformat(timespec="seconds"), work_id=m["work_id"],
+                         url="\n".join(links))
+                s.pop("note", None)
+                s.pop("error", None)
+                print(f"followup: {tid} にリプしました")
         except Exception as e:  # noqa: BLE001
             s["tries"] = s.get("tries", 0) + 1
             s["error"] = str(e)[:200]
@@ -1271,7 +1327,7 @@ class Bot(discord.Client):
         SAVE_DIR.mkdir(parents=True, exist_ok=True)
         await start_web()
         self.sched_task = asyncio.create_task(scheduler_loop())
-        if FOLLOWUP_ON and not ENT:  # エンタメ用には不要
+        if FOLLOWUP_ON:
             self.followup_task = asyncio.create_task(followup_loop())
 
 
