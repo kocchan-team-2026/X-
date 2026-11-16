@@ -2,6 +2,7 @@
 動画は保存後に macOS のクリップボードへファイルとしてコピーする (Cmd+V で貼り付け可能)。
 """
 import asyncio
+import base64
 import json
 import os
 import re
@@ -248,6 +249,64 @@ def save_tweet(user: str, tweet_id: str, work_id: str, src: dict | None = None) 
 
 PORT = int(os.environ.get("GALLERY_PORT_ENT", "8766")) if ENT else int(os.environ.get("GALLERY_PORT", "8765"))
 GALLERY_URL = f"http://localhost:{PORT}"
+
+AV_LOCK = asyncio.Lock()
+
+
+def av_dir() -> Path:
+    d = SAVE_DIR / "_avatars"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def av_ver(pid: str) -> int:
+    """キャッシュ済みアイコンの更新時刻(なければ0)。画像URLのキャッシュ破棄に使う"""
+    f = av_dir() / f"{pid}.jpg"
+    return int(f.stat().st_mtime) if f.exists() else 0
+
+
+async def fetch_avatars(force: bool = False) -> int:
+    """Xdeck の x/get から各アカウントのアイコンを取得して保存する(1件ずつ・間隔を空ける)。
+    force=False なら未取得のアカウントだけ。取得できた件数を返す"""
+    if AV_LOCK.locked():
+        return 0
+    n = 0
+    async with AV_LOCK:
+        prof = (await asyncio.to_thread(xdeck, "GET", "profile/list"))["data"]["list"]
+        groups = (await asyncio.to_thread(xdeck, "GET", "group/list"))["data"]["list"]
+        gname = {g["group_id"]: g["name"] for g in groups}
+        for x in prof:
+            pid = x["profile_id"]
+            if not group_ok(gname.get(x["group_id"], "")) or (not force and av_ver(pid)):
+                continue
+            try:
+                info = (await asyncio.to_thread(xdeck, "GET", "x/get", params={"profile_id": pid}))["data"]["profile"]
+                m = re.match(r"data:image/[\w+.-]+;base64,(.+)", info.get("avatarDataUrl") or "", re.S)
+                if m:
+                    data = base64.b64decode(m.group(1))
+                elif info.get("avatarUrl"):
+                    data = (await asyncio.to_thread(requests.get, info["avatarUrl"], timeout=20)).content
+                else:
+                    continue
+                await asyncio.to_thread((av_dir() / f"{pid}.jpg").write_bytes, data)
+                n += 1
+            except Exception as e:  # noqa: BLE001
+                print(f"avatar: {pid} 取得失敗: {e}")
+            await asyncio.sleep(1.0)
+    return n
+
+
+def favicon_svg() -> str:
+    c1, c2 = ("#ff8a5c", "#e0357a") if ENT else ("#4a82f2", "#1d4fd0")  # 普通=青 / エンタメ=オレンジ〜ピンク
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 824 824"><defs>'
+            f'<linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{c1}"/>'
+            f'<stop offset="1" stop-color="{c2}"/></linearGradient></defs>'
+            '<rect x="100" y="100" width="824" height="824" rx="184" fill="url(#g)"/>'
+            '<rect x="240" y="240" width="250" height="330" rx="44" fill="#fff"/>'
+            '<rect x="534" y="240" width="250" height="196" rx="44" fill="#fff" fill-opacity=".92"/>'
+            '<rect x="534" y="480" width="250" height="90" rx="40" fill="#fff" fill-opacity=".75"/>'
+            '<rect x="240" y="614" width="544" height="170" rx="44" fill="#fff" fill-opacity=".6"/></svg>')
+
 
 def page() -> str:
     html = (Path(__file__).parent / "ui.html").read_text(encoding="utf-8")
@@ -499,6 +558,75 @@ async def run_shadowban(job: str, profile_ids: list[str]) -> None:
         st["error"] = str(e)[:200]
 
 
+IMP_FILE = lambda: SAVE_DIR / "_imps.json"  # noqa: E731
+IMP_JOBS: dict[str, dict] = {}
+IMP_LOCK = asyncio.Lock()
+
+
+def imp_load() -> dict:
+    f = IMP_FILE()
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+
+
+def last_tweets() -> dict[str, dict]:
+    """アカウントごとの最新投稿(このボードから投稿した分)。{profile_id: {tweet_id, at, link}}"""
+    out: dict[str, dict] = {}
+
+    def upd(pid: str, at: str, tid: str, link: str = "") -> None:
+        if pid and tid and at and at > out.get(pid, {}).get("at", ""):
+            out[pid] = {"tweet_id": str(tid), "at": at, "link": link}
+
+    f = SAVE_DIR / "_posts.log"
+    if f.exists():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                e = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            r = e.get("response") or {}
+            if e.get("event") == "response" and r.get("code") == 0:
+                upd(e.get("profile_id", ""), e.get("at", ""), (r.get("data") or {}).get("tweet_id", ""))
+    for x in load_sched():
+        if x["status"] == "done" and x.get("link"):
+            m = re.search(r"/status/(\d+)", x["link"])
+            if m:
+                upd(x["profile_id"], x.get("finished") or x["at"], m.group(1), x["link"])
+    return out
+
+
+async def run_imps(job: str, targets: dict[str, dict]) -> None:
+    st = IMP_JOBS[job]
+    sem = asyncio.Semaphore(4)  # 同時4件まで(各アカウントの通信経路が遅いため並列化)
+
+    async def one(pid: str, t: dict) -> None:
+        async with sem:
+            try:
+                res = await asyncio.to_thread(xdeck, "GET", "x/tweet", params={"profile_id": pid, "tweet": t["tweet_id"]}, timeout=90)
+                if res.get("code") != 0:
+                    raise RuntimeError(res.get("msg") or "failed")
+                d = res["data"]
+                c = d.get("counts") or {}
+                rec = {"tweet_id": t["tweet_id"], "posted_at": t["at"], "views": c.get("views"), "likes": c.get("favorites"),
+                       "retweets": c.get("retweets"), "replies": c.get("replies"), "bookmarks": c.get("bookmarks"),
+                       "screen_name": (d.get("author") or {}).get("screenName", ""),
+                       "fetched_at": datetime.now().isoformat(timespec="seconds")}
+            except Exception as e:  # noqa: BLE001
+                rec = {"tweet_id": t["tweet_id"], "posted_at": t["at"], "views": None, "error": str(e)[:120],
+                       "fetched_at": datetime.now().isoformat(timespec="seconds")}
+        async with IMP_LOCK:
+            d0 = imp_load()
+            d0[pid] = rec
+            IMP_FILE().write_text(json.dumps(d0, ensure_ascii=False, indent=1), encoding="utf-8")
+        st["done"] += 1
+
+    try:
+        await asyncio.gather(*(one(p, t) for p, t in targets.items()))
+        st["state"] = "finished"
+    except Exception as e:  # noqa: BLE001
+        st["state"] = "error"
+        st["error"] = str(e)[:200]
+
+
 BULK: dict[str, dict] = {}
 
 
@@ -651,6 +779,140 @@ async def run_due_posts() -> None:
             shutil.rmtree(SAVE_DIR / "_sched" / x["id"], ignore_errors=True)
 
 
+FOLLOWUP_ON = os.environ.get("FOLLOWUP", "1") != "0"           # 0 で自動リプを止める
+FOLLOWUP_TEXT = os.environ.get("FOLLOWUP_TEXT", "続きです〜")      # リプの本文(この後ろにリンクを付ける)
+FOLLOWUP_FILE = lambda: SAVE_DIR / "_followups.json"  # noqa: E731
+FOLLOWUP_WINDOW_H = 24   # 到達後これを過ぎたらリンク未登録でも諦める
+FOLLOWUP_MAX_TRIES = 3
+
+
+def fu_load() -> dict:
+    f = FOLLOWUP_FILE()
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+
+
+def fu_save(d: dict) -> None:
+    FOLLOWUP_FILE().write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def posted_tweets() -> dict[str, dict]:
+    """このボードから投稿した {tweet_id: {work_id, profile_id}}(即時投稿の記録 + 予約投稿の完了分)"""
+    out: dict[str, dict] = {}
+    f = SAVE_DIR / "_posts.log"
+    if f.exists():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            try:
+                e = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            r = e.get("response") or {}
+            tid = str((r.get("data") or {}).get("tweet_id") or "")
+            if e.get("event") == "response" and r.get("code") == 0 and tid:
+                out[tid] = {"work_id": e.get("work_id", ""), "profile_id": e.get("profile_id", "")}
+    for x in load_sched():
+        m = re.search(r"/status/(\d+)", x.get("link") or "")
+        if x["status"] == "done" and m:
+            out[m.group(1)] = {"work_id": x["work_id"], "profile_id": x["profile_id"]}
+    return out
+
+
+def work_affiliate(wid: str) -> str:
+    f = WORKS_DIR / f"{wid}.json"
+    if not wid or "/" in wid or not f.exists():
+        return ""
+    try:
+        return json.loads(f.read_text(encoding="utf-8")).get("affiliate", "") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+async def post_followup(profile_id: str, tweet_id: str, text: str) -> str:
+    """対象ツイートへのリプとして投稿し、完了まで待つ。投稿したリプのツイートIDを返す(失敗は例外)"""
+    payload = {"kind": "post", "profile_ids": [profile_id], "text": text, "reply_to": tweet_id}
+    with open(SAVE_DIR / "_posts.log", "a", encoding="utf-8") as lf:
+        lf.write(json.dumps({"at": datetime.now().isoformat(timespec="seconds"), "event": "followup_request",
+                             "profile_id": profile_id, "reply_to": tweet_id, "text": text}, ensure_ascii=False) + "\n")
+    res = await asyncio.to_thread(xdeck, "POST", "x/bulk", json=payload, timeout=300)
+    if res.get("code") != 0:
+        raise RuntimeError(res.get("msg") or str(res))
+    jid = (res.get("data") or {}).get("job_id")
+    job: dict = {}
+    for _ in range(30):
+        job = ((await asyncio.to_thread(xdeck, "GET", "x/bulk/status", params={"job_id": jid, "id": jid})).get("data")) or {}
+        if str(job.get("state")).lower() in ("done", "failed", "error", "finished", "completed"):
+            break
+        await asyncio.sleep(2)
+    if job.get("failed", 0) > 0 or str(job.get("state")).lower() in ("failed", "error"):
+        raise RuntimeError(job.get("error") or "Xdeck 側でリプの投稿に失敗しました")
+    return str(job.get("tweet_id") or "")
+
+
+async def run_followups() -> None:
+    """インプ達成(Xdeck のインプ通知が reached)した投稿に、同じアカウントから「続きです〜」をリプし、そのリプにアフィリエイトリンクをリプする"""
+    alerts = (await asyncio.to_thread(xdeck, "GET", "imp-alerts/list"))["data"]["alerts"]
+    reached = [a for a in alerts if a.get("status") == "reached"]
+    st = fu_load()
+    if "_baseline" not in st:
+        # 初回は、すでに到達済みの投稿には返信しない(過去分への一斉リプ防止)
+        for a in reached:
+            st[str(a["tweetId"])] = {"state": "baseline"}
+        st["_baseline"] = datetime.now().isoformat(timespec="seconds")
+        fu_save(st)
+        return
+    mine = None
+    for a in reached:
+        tid = str(a["tweetId"])
+        s = st.get(tid)
+        if s and s.get("state") in ("baseline", "done", "gave_up"):
+            continue
+        if mine is None:
+            mine = await asyncio.to_thread(posted_tweets)
+        m = mine.get(tid)
+        if not m:  # このボードで投稿したものではない
+            st[tid] = {"state": "baseline"}
+            continue
+        s = st.setdefault(tid, {"state": "waiting", "tries": 0})
+        reached_at = datetime.fromtimestamp((a.get("reachedAt") or 0) / 1000)
+        url = await asyncio.to_thread(work_affiliate, m["work_id"])
+        if not url:
+            s["state"] = "waiting"
+            s["note"] = "作品にアフィリエイトリンクが未登録"
+            if datetime.now() - reached_at > timedelta(hours=FOLLOWUP_WINDOW_H):
+                s["state"] = "gave_up"
+            continue
+        try:
+            # ①元ツイートに「続きです〜」→ ②そのリプにリンクをリプ(①の投稿済みは再試行時にやり直さない)
+            if not s.get("reply1"):
+                s["reply1"] = await post_followup(m["profile_id"], tid, FOLLOWUP_TEXT)
+                if not s["reply1"]:
+                    s.update(state="gave_up", error="「続きです」のIDを取得できず、リンクのリプができませんでした")
+                    fu_save(st)
+                    continue
+                fu_save(st)
+            await post_followup(m["profile_id"], s["reply1"], url)
+            s.update(state="done", at=datetime.now().isoformat(timespec="seconds"), work_id=m["work_id"], url=url)
+            s.pop("note", None)
+            s.pop("error", None)
+            print(f"followup: {tid} にリプしました")
+        except Exception as e:  # noqa: BLE001
+            s["tries"] = s.get("tries", 0) + 1
+            s["error"] = str(e)[:200]
+            if s["tries"] >= FOLLOWUP_MAX_TRIES:
+                s["state"] = "gave_up"
+            print(f"followup: {tid} 失敗({s['tries']}/{FOLLOWUP_MAX_TRIES}): {e}")
+        fu_save(st)
+    fu_save(st)
+
+
+async def followup_loop() -> None:
+    while True:
+        try:
+            await run_followups()
+        except Exception as e:  # noqa: BLE001
+            print("followup error:", e)
+        await asyncio.sleep(180)
+
+
 async def scheduler_loop() -> None:
     while True:
         try:
@@ -693,12 +955,26 @@ async def start_web():
         await asyncio.to_thread(lambda: subprocess.run(["pbcopy"], input=url.encode(), check=True))
         return web.Response(text="ok")
 
+    async def api_avatar(req):
+        pid = req.match_info["id"]
+        f = av_dir() / f"{pid}.jpg"
+        if "/" in pid or ".." in pid or not f.exists():
+            raise web.HTTPNotFound()
+        return web.FileResponse(f, headers={"Cache-Control": "max-age=86400"})
+
+    async def api_avatars_refresh(_):
+        asyncio.create_task(fetch_avatars(True))  # 数十秒かかるので裏で実行
+        return web.json_response({"started": True})
+
     async def api_profiles(_):
+        asyncio.create_task(fetch_avatars())  # 未取得のアイコンだけ裏で取得(次回の読み込みで反映)
         prof = (await asyncio.to_thread(xdeck, "GET", "profile/list"))["data"]["list"]
         groups = (await asyncio.to_thread(xdeck, "GET", "group/list"))["data"]["list"]
         gname = {g["group_id"]: g["name"] for g in groups}
         last = await asyncio.to_thread(last_posts)
         sb = await asyncio.to_thread(sb_load)
+        imps = await asyncio.to_thread(imp_load)
+        lt = await asyncio.to_thread(last_tweets)
         nxt: dict[str, list[str]] = {}
         for x in await asyncio.to_thread(load_sched):
             if x["status"] in ("pending", "running"):
@@ -706,6 +982,7 @@ async def start_web():
         return web.json_response([
             {"id": x["profile_id"], "name": x["name"], "group": gname.get(x["group_id"], ""),
              "last": last.get(x["profile_id"], ""), "sb": sb.get(x["profile_id"]),
+             "imp": imps.get(x["profile_id"]), "has_post": x["profile_id"] in lt, "av": av_ver(x["profile_id"]),
              "next": min(nxt.get(x["profile_id"], [""])), "next_n": len(nxt.get(x["profile_id"], []))}
             for x in prof if group_ok(gname.get(x["group_id"], ""))])
 
@@ -769,6 +1046,25 @@ async def start_web():
             raise web.HTTPBadRequest(text="invalid url")
         ok = await asyncio.to_thread(register_imp_alert, url)
         return web.json_response({"ok": ok, "target": IMP_TARGET})
+
+    async def api_imps_start(req):
+        b = await req.json()
+        ids = [str(x) for x in b.get("profile_ids", [])]
+        valid = {p["id"] for p in await asyncio.to_thread(get_profiles) if group_ok(p["group"])}
+        lt = await asyncio.to_thread(last_tweets)
+        targets = {i: lt[i] for i in ids if i in valid and i in lt}
+        if not targets:
+            raise web.HTTPBadRequest(text="投稿履歴のあるアカウントがありません")
+        job = "imp-" + datetime.now().strftime("%H%M%S") + "-" + os.urandom(2).hex()
+        IMP_JOBS[job] = {"state": "running", "total": len(targets), "done": 0}
+        asyncio.create_task(run_imps(job, targets))
+        return web.json_response({"job": job})
+
+    async def api_imps_status(req):
+        st = IMP_JOBS.get(req.match_info["job"])
+        if not st:
+            raise web.HTTPNotFound()
+        return web.json_response(st)
 
     async def api_sb_start(req):
         b = await req.json()
@@ -943,9 +1239,12 @@ async def start_web():
         res = await asyncio.to_thread(xdeck, "GET", "x/bulk/status", params={"job_id": jid, "id": jid})
         return web.json_response(res)
 
+    async def favicon(req):
+        return web.Response(text=favicon_svg(), content_type="image/svg+xml")
+
     app = web.Application()
     app.add_routes([
-        web.get("/", index), web.get("/api/items", api_items),
+        web.get("/api/avatar/{id}", api_avatar), web.post("/api/avatars/refresh", api_avatars_refresh), web.get("/", index), web.get("/favicon.svg", favicon), web.get("/favicon.ico", favicon), web.get("/api/items", api_items),
         web.get("/files/{id}/{name}", files),
         web.post("/copy/{id}/{name}", copy_file),
         web.post("/copytext/{id}", copy_text),
@@ -953,7 +1252,7 @@ async def start_web():
         web.get("/thumb/{id}/{name}", thumb), web.get("/api/history/{work}", api_history),
         web.post("/api/edit", api_edit), web.get("/edited/{id}/{name}", edited_file),
         web.get("/api/profiles", api_profiles), web.post("/api/rewrite", api_rewrite),
-        web.post("/api/post", api_post), web.post("/api/bulk", api_bulk), web.post("/api/delete_work", api_delete_work), web.post("/api/affiliate", api_affiliate), web.post("/api/shadowban", api_sb_start), web.get("/api/shadowban/{job}", api_sb_status), web.post("/api/imp_alert", api_imp_alert), web.get("/api/bulk/{job}", api_bulk_status), web.post("/api/move", api_move), web.get("/api/schedule", api_sched_list),
+        web.post("/api/post", api_post), web.post("/api/bulk", api_bulk), web.post("/api/delete_work", api_delete_work), web.post("/api/affiliate", api_affiliate), web.post("/api/imps", api_imps_start), web.get("/api/imps/{job}", api_imps_status), web.post("/api/shadowban", api_sb_start), web.get("/api/shadowban/{job}", api_sb_status), web.post("/api/imp_alert", api_imp_alert), web.get("/api/bulk/{job}", api_bulk_status), web.post("/api/move", api_move), web.get("/api/schedule", api_sched_list),
         web.post("/api/schedule", api_sched_add), web.delete("/api/schedule/{sid}", api_sched_del), web.get("/api/job/{job}", api_job),
     ])
     runner = web.AppRunner(app)
@@ -972,6 +1271,8 @@ class Bot(discord.Client):
         SAVE_DIR.mkdir(parents=True, exist_ok=True)
         await start_web()
         self.sched_task = asyncio.create_task(scheduler_loop())
+        if FOLLOWUP_ON and not ENT:  # エンタメ用には不要
+            self.followup_task = asyncio.create_task(followup_loop())
 
 
 client = Bot(intents=intents)

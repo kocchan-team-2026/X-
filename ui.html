@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>X保存ボード__BN__</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 :root{
   --bg:#0f1115; --surface:#171a21; --surface2:#1f232c; --border:#2e3440;
@@ -123,7 +124,9 @@ details summary{cursor:pointer;color:var(--muted)}
 .cand{display:block;width:100%;text-align:left;background:var(--surface2);border:2px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;white-space:pre-wrap}.cand:hover{border-color:#4a5163}.cand[aria-pressed=true]{border-color:#7fb0ff}.cand b{color:var(--muted);margin-right:6px}
 .preview{border:1px solid var(--border);border-radius:14px;padding:14px;background:#0f1115}
 .preview .who{display:flex;gap:10px;align-items:center;margin-bottom:8px}
-.avatar{width:38px;height:38px;border-radius:50%;background:#2f3a55;display:grid;place-items:center;font-weight:700}
+.av{width:24px;height:24px;border-radius:50%;object-fit:cover;flex:none;background:#2f3a55;vertical-align:middle}
+.av.ph{display:inline-grid;place-items:center;font-size:12px;font-weight:700}
+.avatar{overflow:hidden;width:38px;height:38px;border-radius:50%;background:#2f3a55;display:grid;place-items:center;font-weight:700}
 .preview .tx{white-space:pre-wrap;margin-bottom:10px}
 .preview video,.preview img{width:100%;border-radius:12px;max-height:320px;object-fit:contain;background:#000;display:block;margin-top:6px}
 .checks{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:6px}
@@ -163,6 +166,7 @@ details summary{cursor:pointer;color:var(--muted)}
   <input id="q" class="search" type="search" placeholder="本文・投稿者・URLで検索" aria-label="検索">
   <div class="chips" id="chips" role="group" aria-label="絞り込み"></div>
   <span class="count" id="count"></span>
+  <button class="btn" id="impbtn">📈 imp取得</button>
   <button class="btn" id="sbbtn">🔍 シャドウバン判定</button>
   <button class="btn" id="bulkbtn">🎲 一括予約</button>
   <button class="btn" id="schedbtn">🕒 予約</button>
@@ -175,6 +179,7 @@ details summary{cursor:pointer;color:var(--muted)}
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="投稿を作成" hidden></div>
 <div class="modal" id="schedpanel" role="dialog" aria-modal="true" aria-label="予約投稿" hidden></div>
 <div class="modal" id="bulkpanel" role="dialog" aria-modal="true" aria-label="一括予約" hidden></div>
+<div class="modal" id="imppanel" role="dialog" aria-modal="true" aria-label="最新投稿のimp" hidden></div>
 <div class="modal" id="sbpanel" role="dialog" aria-modal="true" aria-label="シャドウバン判定" hidden></div>
 <div id="toast" aria-live="polite"></div>
 
@@ -234,6 +239,7 @@ async function refreshProfiles(btn){
   if(btn){btn.disabled=true;btn.textContent='更新中…';}
   try{
     const old=PROFILES||await api('/api/profiles').catch(()=>[]);
+    api('/api/avatars/refresh',{method:'POST'}).then(()=>setTimeout(async()=>{try{PROFILES=await api('/api/profiles');if(P&&P.step===0)renderPost();}catch(e){}},60000)).catch(()=>{});
     const nw=await api('/api/profiles');
     const key=a=>a.id+'|'+a.name+'|'+a.group, os=new Set(old.map(key));
     const changed=nw.filter(a=>!os.has(key(a))).length, gone=old.filter(a=>!nw.some(b=>b.id===a.id)).length;
@@ -245,7 +251,14 @@ async function refreshProfiles(btn){
   finally{const b=$('#refprof');if(b){b.disabled=false;b.textContent='↻ アカウント更新';}
     const c=$('#pref');if(c){c.disabled=false;c.textContent='↻ 更新';}}
 }
-async function profiles(){if(!PROFILES)PROFILES=await api('/api/profiles');return PROFILES;}
+const avt=(p,s)=>p&&p.av?`<img class="av" src="/api/avatar/${p.id}?v=${p.av}" alt="" loading="lazy"${s?` style="width:${s}px;height:${s}px"`:''}>`:`<span class="av ph"${s?` style="width:${s}px;height:${s}px"`:''}>${esc((p&&p.name||'?').slice(0,1))}</span>`;
+let avPoll=0;
+function pollAvatars(){ // 未取得のアイコンは裏で取得中なので、数回だけ取り直して反映する
+  if(avPoll>=8||!PROFILES||PROFILES.every(p=>p.av))return;
+  avPoll++;
+  setTimeout(async()=>{try{PROFILES=await api('/api/profiles');if(P&&P.step===0)renderPost();}catch(e){}pollAvatars();},20000);
+}
+async function profiles(){if(!PROFILES){PROFILES=await api('/api/profiles');pollAvatars();}return PROFILES;}
 function openDrawer(id){openId=id;$('#scrim').hidden=false;$('#drawer').hidden=false;drawDrawer(works.find(w=>w.work_id===id));}
 function closeDrawer(){openId=null;$('#scrim').hidden=true;$('#drawer').hidden=true;$('#drawer').innerHTML='';}
 $('#scrim').addEventListener('click',()=>{if($('#modal').hidden)closeDrawer();});
@@ -389,7 +402,7 @@ function stepAcc(){
   const groups=[...new Set(list.map(p=>p.group))];
   return `<div class="field"><div class="row" style="justify-content:space-between;margin-bottom:6px"><label class="l" for="paccq" style="margin:0">投稿するアカウント</label><button class="btn" id="pref" style="padding:4px 10px">↻ 更新</button></div>
     <input id="paccq" type="text" placeholder="名前・グループで絞り込み" value="${esc(P.accQ)}"></div>
-    ${!PROFILES?'<div class="note">アカウント一覧を読み込み中…</div>':`<div class="accs" role="radiogroup" aria-label="アカウント">${groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="radio" aria-checked="${P.profile===p.id}" data-p="${p.id}"><span class="mark"></span>${esc(p.name)} ${sbBadge(p)}<span class="lastp">${esc(lastTxt(p))}</span></button>`).join('')}`).join('')||'<div class="note" style="padding:12px">該当なし</div>'}</div>`}
+    ${!PROFILES?'<div class="note">アカウント一覧を読み込み中…</div>':`<div class="accs" role="radiogroup" aria-label="アカウント">${groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="radio" aria-checked="${P.profile===p.id}" data-p="${p.id}"><span class="mark"></span>${avt(p)}${esc(p.name)} ${sbBadge(p)}<span class="lastp">${esc(lastTxt(p))}</span></button>`).join('')}`).join('')||'<div class="note" style="padding:12px">該当なし</div>'}</div>`}
     <div class="note">${P.profile?`選択中: <b>${esc(P.profName)}</b>`:'アカウントを選んでください'}</div>`;
 }
 function stepText(){
@@ -436,6 +449,7 @@ function sbBadge(p){if(!p.sb)return '<span class="sbb" title="未判定">⚫</sp
   return `<span class="sbb" title="${esc(tip)}">${i[0]}</span><span class="sbt">${esc(p.sb.label)}${p.sb.flags&&p.sb.flags.length?`:${esc(p.sb.flags.join("・"))}`:p.sb.error?`:${esc(p.sb.error)}`:''}</span>`;}
 function lastTxt(p){const l=p.last?`前回 ${fmtAt(p.last).slice(5)}`:'前回 なし';
   return p.next?`${l} ／ 予約 ${fmtAt(p.next).slice(5)}${p.next_n>1?`(他${p.next_n-1}件)`:''}`:l;}
+function impTxt(p){const i=p.imp;return !p.has_post?'imp -':!i||i.views==null?'imp 未取得':`📈 ${Number(i.views).toLocaleString()} imp`;}
 function pad(n){return String(n).padStart(2,'0');}
 function toLocalInput(d){return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;}
 function defAt(){const d=new Date(Date.now()+3600e3);d.setMinutes(0,0,0);return toLocalInput(d);}
@@ -453,7 +467,7 @@ function stepConfirm(){
       <button class="btn" id="pagain">別のアカウントで投稿する</button><button class="btn" id="pclose2">閉じる</button></div></div>`;
   const vid=P.sel.find(m=>m.k==='v'),imgs=P.sel.filter(m=>m.k==='i'),bl=blockers();
   const mediaHtml=vid?(P.useEd&&P.ed.state==='ok'?`<video src="${P.ed.info.url}" preload="metadata" controls></video>`:`<video src="/files/${vid.id}/${vid.name}" controls></video>`):imgs.map(m=>`<img src="/files/${m.id}/${m.name}" alt="">`).join('');
-  return `<div class="preview"><div class="who"><div class="avatar">${esc((P.profName||'?').slice(0,1))}</div><div><b>${esc(P.profName||'(アカウント未選択)')}</b><div class="note" style="margin:0">投稿プレビュー</div></div></div>
+  return `<div class="preview"><div class="who"><div class="avatar">${(()=>{const pp=(PROFILES||[]).find(q=>q.id===P.profile);return pp&&pp.av?`<img src="/api/avatar/${pp.id}?v=${pp.av}" alt="" style="width:100%;height:100%;object-fit:cover;margin:0;border-radius:0;max-height:none">`:esc((P.profName||'?').slice(0,1));})()}</div><div><b>${esc(P.profName||'(アカウント未選択)')}</b><div class="note" style="margin:0">投稿プレビュー</div></div></div>
     <div class="tx">${esc(P.text)}</div>${mediaHtml}</div>
     <ul class="checks"><li class="${P.profile?'':'ng'}">投稿先: ${esc(P.profName||'未選択')}</li>
       <li class="${P.text.trim()?'':'ng'}">本文 ${[...P.text].length} 文字</li>
@@ -565,9 +579,9 @@ function drawBulk(){
     const groups=[...new Set(list.map(p=>p.group))];
     const n=B.sel.size,total=n*B.per;
     body=`<div class="field"><div class="row" style="justify-content:space-between;margin-bottom:6px"><div class="l" style="margin:0">アカウント(${n}件選択中)</div>
-        <div class="row"><button class="btn" id="ball" style="padding:4px 10px">表示中を全選択</button><button class="btn" id="bnone" style="padding:4px 10px">解除</button></div></div>
+        <div class="row"><button class="btn" id="ball" style="padding:4px 10px">表示中を全選択</button><button class="btn" id="bcond" style="padding:4px 10px" title="imp 500以下 かつ 前回投稿から6時間以上経過(imp・前回投稿が分かるアカウントのみ)">500imp以下・6h経過を選択</button><button class="btn" id="bimp" style="padding:4px 10px"${B.impBusy?' disabled':''}>${B.impBusy?`imp取得中 ${B.impBusy.done}/${B.impBusy.total}…`:'📈 imp更新'}</button><button class="btn" id="bnone" style="padding:4px 10px">解除</button></div></div>
       <input id="bq" type="text" placeholder="名前・グループで絞り込み" value="${esc(B.q)}"></div>
-      <div class="accs" style="max-height:260px;overflow:auto">${!PROFILES?'<div class="note">読み込み中…</div>':groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="checkbox" aria-checked="${B.sel.has(p.id)}" data-b="${p.id}"><span class="mark"></span>${esc(p.name)} ${sbBadge(p)}<span class="lastp">${esc(lastTxt(p))}</span></button>`).join('')}`).join('')}</div>
+      <div class="accs" style="max-height:260px;overflow:auto">${!PROFILES?'<div class="note">読み込み中…</div>':groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="checkbox" aria-checked="${B.sel.has(p.id)}" data-b="${p.id}"><span class="mark"></span>${avt(p)}${esc(p.name)} ${sbBadge(p)}<span class="lastp" title="${p.imp&&p.imp.fetched_at?esc('imp取得 '+p.imp.fetched_at.slice(5,16).replace('T',' ')):''}">${esc(impTxt(p))} ／ ${esc(lastTxt(p))}</span></button>`).join('')}`).join('')}</div>
       <div class="note" style="margin-top:8px">⚫=未判定 🟢=問題なし 🟡=注意(理由を併記) 🔴=規制の疑い(判定は上部の「🔍 シャドウバン判定」から)</div>
       <div class="field" style="margin-top:14px"><div class="l">投稿する時間帯</div>
         <div class="row" style="margin-bottom:8px"><span class="note" style="margin:0">日付</span>${dsel('bsd',B.sd)}</div>
@@ -597,6 +611,12 @@ function drawBulk(){
   const bq=$('#bq');if(bq)bq.oninput=e=>{B.q=e.target.value;const pos=e.target.selectionStart;drawBulk();const n=$('#bq');n.focus();n.setSelectionRange(pos,pos);};
   const vis=()=>(PROFILES||[]).filter(p=>!B.q||p.name.toLowerCase().includes(B.q.toLowerCase())||p.group.includes(B.q)).map(p=>p.id);
   const ba=$('#ball');if(ba)ba.onclick=()=>{vis().forEach(i=>B.sel.add(i));drawBulk();};
+  const bc=$('#bcond');if(bc)bc.onclick=()=>{
+    const now=Date.now(),ok=p=>p.imp&&p.imp.views!=null&&p.imp.views<=500&&p.last&&now-new Date(p.last).getTime()>=6*3600*1000;
+    const vs=new Set(vis()),hit=(PROFILES||[]).filter(p=>vs.has(p.id)&&ok(p)).map(p=>p.id);
+    B.sel.clear();hit.forEach(i=>B.sel.add(i));drawBulk();
+    toast(hit.length?`${hit.length}件を選択しました(imp 500以下・前回投稿から6時間以上)`:'条件に合うアカウントがありません',!hit.length);
+  };
   const bn=$('#bnone');if(bn)bn.onclick=()=>{B.sel.clear();drawBulk();};
   const bsd=$('#bsd');if(bsd)bsd.onchange=e=>{const old=B.sd;B.sd=e.target.value;
     // 開始日を変えたら、終了日も同じ日数ぶんずらす(日をまたぐ設定を保つ)
@@ -606,8 +626,77 @@ function drawBulk(){
   const bt=$('#bet');if(bt)bt.onchange=e=>{B.et=e.target.value;B.preset='';drawBulk();};
   pn.querySelectorAll('[data-pre]').forEach(b=>b.onclick=()=>{applyPre(B,BPRE.find(x=>x[0]===b.dataset.pre));drawBulk();});
   const bp=$('#bper');if(bp)bp.onchange=e=>{B.per=Math.min(20,Math.max(1,+e.target.value||1));drawBulk();};
+  const bi=$('#bimp');if(bi)bi.onclick=async()=>{
+    if(B.impBusy)return;
+    try{
+      const ids=(PROFILES||[]).filter(p=>p.has_post).map(p=>p.id);
+      if(!ids.length){toast('投稿履歴のあるアカウントがありません',true);return;}
+      const o=await api('/api/imps',{method:'POST',body:JSON.stringify({profile_ids:ids})});
+      B.impBusy={done:0,total:ids.length};drawBulk();
+      for(;;){
+        await new Promise(r=>setTimeout(r,1500));
+        const st=await api('/api/imps/'+o.job);
+        B.impBusy={done:st.done,total:st.total};
+        PROFILES=await api('/api/profiles');
+        if(st.state!=='running')break;
+        if(BK===B)drawBulk();
+      }
+      toast('imp を更新しました ✓');
+    }catch(e){toast('imp取得に失敗: '+e.message,true);}
+    B.impBusy=null;if(BK===B)drawBulk();
+  };
   const br=$('#brun');if(br)br.onclick=runBulk;
 }
+/* ===== 最新投稿のimp ===== */
+let IMP=null;
+const fmtN=n=>n==null?'-':Number(n).toLocaleString();
+async function openImp(){
+  IMP={q:'',busy:null};
+  $('#imppanel').hidden=false;drawImp();
+  try{PROFILES=await api('/api/profiles');}catch(e){toast('アカウント一覧を取得できません: '+e.message,true);}
+  if(IMP)drawImp();
+}
+function closeImp(){IMP=null;$('#imppanel').hidden=true;$('#imppanel').innerHTML='';}
+function drawImp(){
+  const pn=$('#imppanel'),B=IMP;if(!B)return;
+  const ps=PROFILES||[],q=B.q.toLowerCase(),list=ps.filter(p=>!q||p.name.toLowerCase().includes(q)||p.group.includes(q));
+  const groups=[...new Set(list.map(p=>p.group))],n=ps.filter(p=>p.has_post).length;
+  const keepEl=pn.querySelector('.accs'),keep=keepEl?keepEl.scrollTop:0;
+  const row=p=>{const i=p.imp;
+    const val=!p.has_post?'<span class="lastp">投稿なし</span>':!i?'<span class="lastp">未取得</span>':i.views==null?`<span class="lastp">取得失敗</span>`
+      :`<span class="lastp"><b>${fmtN(i.views)}</b> imp ・♥${fmtN(i.likes)} ・🔁${fmtN(i.retweets)} ・🔖${fmtN(i.bookmarks)}</span>`;
+    const link=i&&i.screen_name?` <a href="https://x.com/${esc(i.screen_name)}/status/${esc(i.tweet_id)}" target="_blank" rel="noopener">開く</a>`:'';
+    return `<div class="acc" style="cursor:default"><span class="mark" style="visibility:hidden"></span>${avt(p)}${esc(p.name)}${link} ${val}${i&&i.fetched_at?`<span class="lastp" style="margin-left:6px">${esc(fmtAt(i.posted_at).slice(5))}投稿 / ${esc(i.fetched_at.slice(5,16).replace('T',' '))}取得</span>`:''}</div>`;};
+  pn.innerHTML=`<div class="sheet"><header><h2>最新投稿のimp</h2><button class="iconbtn" id="impclose" aria-label="閉じる">✕</button></header><div class="content">
+    <div class="note" style="margin-top:0">各アカウントの「このボードから投稿した最新の1件」の表示回数などを取得します(投稿履歴のあるアカウント: ${n}件)。</div>
+    <div class="field"><input id="impq" type="text" placeholder="名前・グループで絞り込み" value="${esc(B.q)}"></div>
+    <div class="accs" style="max-height:380px;overflow:auto">${!PROFILES?'<div class="note">読み込み中…</div>':groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(row).join('')}`).join('')}</div>
+    <div style="margin-top:14px"><button class="btn go block" id="imprun" ${n&&!B.busy?'':'disabled'}>${B.busy?`取得中 ${B.busy.done}/${B.busy.total}…`:`全アカウントのimpを取得する(${n}件)`}</button></div></div></div>`;
+  const na=pn.querySelector('.accs');if(na)na.scrollTop=keep;
+  $('#impclose').onclick=closeImp;
+  $('#impq').oninput=e=>{B.q=e.target.value;const pos=e.target.selectionStart;drawImp();const t=$('#impq');t.focus();t.setSelectionRange(pos,pos);};
+  $('#imprun').onclick=runImp;
+}
+async function runImp(){
+  const B=IMP;if(!B||B.busy)return;
+  try{
+    const ids=(PROFILES||[]).filter(p=>p.has_post).map(p=>p.id);
+    const o=await api('/api/imps',{method:'POST',body:JSON.stringify({profile_ids:ids})});
+    B.busy={done:0,total:ids.length};drawImp();
+    for(;;){
+      await new Promise(r=>setTimeout(r,1500));
+      const st=await api('/api/imps/'+o.job);
+      B.busy={done:st.done,total:st.total};
+      PROFILES=await api('/api/profiles');
+      if(st.state!=='running')break;
+      if(IMP===B)drawImp();
+    }
+    toast('imp を取得しました ✓');
+    if(IMP===B){B.busy=null;drawImp();}
+  }catch(e){if(IMP===B){B.busy=null;drawImp();}toast('取得に失敗: '+e.message,true);}
+}
+$('#impbtn').onclick=openImp;
+$('#imppanel').addEventListener('click',e=>{if(e.target.id==='imppanel')closeImp();});
 /* ===== シャドウバン判定 ===== */
 let SB=null;
 async function openSb(){
@@ -628,7 +717,7 @@ function drawSb(){
     <div class="field"><div class="row" style="justify-content:space-between;margin-bottom:6px"><div class="l" style="margin:0">アカウント(${n}件選択中)</div>
       <div class="row"><button class="btn" id="sball" style="padding:4px 10px">表示中を全選択</button><button class="btn" id="sbunj" style="padding:4px 10px">未判定だけ選択</button><button class="btn" id="sbnone" style="padding:4px 10px">解除</button></div></div>
       <input id="sbq" type="text" placeholder="名前・グループで絞り込み" value="${esc(B.q)}"></div>
-    <div class="accs" style="max-height:340px;overflow:auto">${!PROFILES?'<div class="note">読み込み中…</div>':groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="checkbox" aria-checked="${B.sel.has(p.id)}" data-sb="${p.id}"><span class="mark"></span>${esc(p.name)} ${sbBadge(p)}<span class="lastp">${p.sb?esc('判定 '+p.sb.checked_at.slice(5,16).replace('T',' ')):''}</span></button>`).join('')}`).join('')}</div>
+    <div class="accs" style="max-height:340px;overflow:auto">${!PROFILES?'<div class="note">読み込み中…</div>':groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="checkbox" aria-checked="${B.sel.has(p.id)}" data-sb="${p.id}"><span class="mark"></span>${avt(p)}${esc(p.name)} ${sbBadge(p)}<span class="lastp">${p.sb?esc('判定 '+p.sb.checked_at.slice(5,16).replace('T',' ')):''}</span></button>`).join('')}`).join('')}</div>
     <div style="margin-top:14px"><button class="btn go block" id="sbrun" ${n&&!B.busy?'':'disabled'}>${B.busy?`判定中 ${B.busy.done}/${B.busy.total}…`:`${n}件をシャドウバン判定する`}</button>
     <div class="note" style="text-align:center">1件あたり約20秒かかります。判定は Xdeck が、対象とは別のアカウントの通信で行います。この画面を閉じても処理は続きます。</div></div></div></div>`;
   const na=pn.querySelector('.accs');if(na)na.scrollTop=keep;
@@ -693,7 +782,7 @@ function openSched(){$('#schedpanel').hidden=false;drawSched();refreshSchedCount
 function closeSched(){$('#schedpanel').hidden=true;}
 function drawSched(){
   const pn=$('#schedpanel');
-  const rows=SCHED.map(x=>{const st=SLBL[x.status]||['',x.status];
+  const rows=[...SCHED].sort((a,b)=>a.at<b.at?1:a.at>b.at?-1:0).map(x=>{const st=SLBL[x.status]||['',x.status];
     return `<div class="srow"><div class="when">${esc(fmtAt(x.at))}${x.status==='pending'?`<div class="note" style="margin:2px 0 0">${esc(remain(x.at))}</div>`:''}</div><div class="main"><b>${esc(x.profile_name)}</b> ${badge(st[0],esc(st[1]))}
       <div class="stx">${esc(x.text)}</div>${x.error?`<div class="note" style="color:var(--err)">${esc(x.error)}</div>`:''}
       ${x.link?`<a href="${esc(x.link)}" target="_blank" rel="noopener">X で開く</a>`:''}</div>
@@ -708,7 +797,7 @@ function drawSched(){
 $('#schedbtn').onclick=openSched;
 $('#schedpanel').addEventListener('click',e=>{if(e.target.id==='schedpanel')closeSched();});
 setInterval(refreshSchedCount,30000);refreshSchedCount();
-document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!$('#sbpanel').hidden)closeSb();else if(!$('#bulkpanel').hidden)closeBulk();else if(!$('#schedpanel').hidden)closeSched();else if(!$('#modal').hidden)closePost();else if(openId)closeDrawer();});
+document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!$('#imppanel').hidden)closeImp();else if(!$('#sbpanel').hidden)closeSb();else if(!$('#bulkpanel').hidden)closeBulk();else if(!$('#schedpanel').hidden)closeSched();else if(!$('#modal').hidden)closePost();else if(openId)closeDrawer();});
 drawChips();
 // URL から直接開ける: #w=作品ID / #post=作品ID&step=2
 load().then(()=>{
