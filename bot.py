@@ -37,6 +37,7 @@ TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 # ボード種別: `python bot.py` = 普通用 / `python bot.py ent` = エンタメ用
 ENT = len(sys.argv) > 1 and sys.argv[1] == "ent"
 BOARD_NAME = "エンタメ" if ENT else "普通"
+BOOST_WORD = "ブースト"  # グループ名にこれを含むアカウントは投稿対象外(普通用・エンタメ用とも)
 ENT_WORD = "エンタメ"  # グループ名にこれを含むアカウントはエンタメ用
 
 
@@ -58,6 +59,8 @@ else:
 
 def group_ok(group: str) -> bool:
     """このボードから投稿してよいグループか"""
+    if BOOST_WORD in group:  # ブースト用グループは普通用・エンタメ用どちらの投稿対象外
+        return False
     return (ENT_WORD in group) == ENT
 
 URL_RE = re.compile(r"https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/(\w+)/status/(\d+)")
@@ -359,13 +362,16 @@ def list_items():
         w = works.setdefault(f.stem, {"work_id": f.stem, "latest": "", "posts": []})
         w["urls"] = urls
         try:
-            w["affiliate"] = json.loads(f.read_text(encoding="utf-8")).get("affiliate", "")
+            meta_w = json.loads(f.read_text(encoding="utf-8"))
+            w["affiliate"] = meta_w.get("affiliate", "")
+            w["weight"] = meta_w.get("weight", 1)
         except Exception:  # noqa: BLE001
             pass
         w["latest"] = max(w["latest"], datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y%m%d_%H%M%S"))
     for w in works.values():
         w.setdefault("urls", [])
         w.setdefault("affiliate", "")
+        w.setdefault("weight", 1)
         times = [p["saved_at"] for p in w["posts"]] + [u.get("added_at", "") for u in w["urls"]]
         times = [t for t in times if t]
         w["created_at"], w["updated_at"] = (min(times), max(times)) if times else ("", "")
@@ -679,6 +685,14 @@ async def prep_one(work: dict, profile: dict, at: datetime, batch: str) -> dict:
 EDIT_LOCK = asyncio.Lock()
 
 
+def work_weight(w: dict) -> float:
+    """作品の選ばれやすさ(0=自動選択から外す / 1=標準 / 2=2倍選ばれやすい …)"""
+    try:
+        return max(0.0, min(10.0, float(w.get("weight", 1))))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 async def run_bulk(job: str, profile_ids: list[str], start: datetime, end: datetime, per: int) -> None:
     import random
     st = BULK[job]
@@ -690,9 +704,14 @@ async def run_bulk(job: str, profile_ids: list[str], start: datetime, end: datet
         usage: dict[str, int] = {w["work_id"]: 0 for w in works}
         plan = []
         for pr in chosen:
-            elig = [w for w in works if (w["work_id"], pr["id"]) not in used]
-            random.shuffle(elig)
-            elig.sort(key=lambda w: usage[w["work_id"]])  # まだ使われていない作品を優先
+            elig = [w for w in works if (w["work_id"], pr["id"]) not in used and work_weight(w) > 0]
+            if len({work_weight(w) for w in elig}) > 1:
+                # 作品ごとの「選ばれやすさ」が違うときは、重みに比例した確率で選ぶ(重複なし)
+                # 重み付きランダム抽出: キー = 乱数^(1/重み) の大きい順(Efraimidis–Spirakis)
+                elig.sort(key=lambda w: random.random() ** (1 / work_weight(w)), reverse=True)
+            else:
+                random.shuffle(elig)
+                elig.sort(key=lambda w: usage[w["work_id"]])  # みな同じ重みなら、まだ使われていない作品を優先
             pick = elig[:per]
             if len(pick) < per:
                 st["notes"].append(f"{pr['name']}: 投稿できる作品が{len(pick)}件しかありません")
@@ -1140,6 +1159,29 @@ async def start_web():
             raise web.HTTPNotFound()
         return web.json_response(st)
 
+    async def api_weight(req):
+        """作品の「選ばれやすさ」(一括予約のランダム選択の重み)を保存。0〜10、標準1"""
+        if ENT:
+            raise web.HTTPNotFound()
+        b = await req.json()
+        wid = str(b.get("work_id", ""))
+        try:
+            wt = round(float(b.get("weight")), 2)
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text="数値を入れてください")
+        if not wid or "/" in wid or wid.startswith(".") or not 0 <= wt <= 10:
+            raise web.HTTPBadRequest(text="0〜10の数値を入れてください")
+        exists = any(
+            json.loads(m.read_text(encoding="utf-8")).get("work_id") == wid for m in SAVE_DIR.glob("*/meta.json"))
+        f = WORKS_DIR / f"{wid}.json"
+        if not exists and not f.exists():
+            raise web.HTTPNotFound()
+        WORKS_DIR.mkdir(parents=True, exist_ok=True)
+        data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"urls": []}
+        data["weight"] = wt
+        f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return web.json_response({"weight": wt})
+
     async def api_affiliate(req):
         """作品のアフィリエイトリンク(MyFansで手動作成したURL)を保存。空文字で消去"""
         if ENT:
@@ -1214,6 +1256,29 @@ async def start_web():
 
     async def api_sched_list(_):
         return web.json_response(sorted(load_sched(), key=lambda x: x["at"]))
+
+    async def api_sched_retry(req):
+        """失敗・見送りになった予約を、すぐ(次の確認タイミングで)もう一度投稿する。sid=all で失敗分すべて"""
+        sid = req.match_info["sid"]
+        n = 0
+        async with SCHED_LOCK:
+            items = load_sched()
+            for x in items:
+                if (sid != "all" and x["id"] != sid) or x["status"] not in ("failed", "missed"):
+                    continue
+                if any(not Path(p).exists() for p in x.get("media", [])):
+                    x["error"] = "添付ファイルが残っていないため再試行できません(削除して作り直してください)"
+                    continue
+                for k in ("error", "finished", "link", "imp_alert"):
+                    x.pop(k, None)
+                x["status"] = "pending"
+                x["at"] = datetime.now().isoformat(timespec="minutes")
+                x["retries"] = x.get("retries", 0) + 1
+                n += 1
+            save_sched(items)
+        if not n and sid != "all":
+            raise web.HTTPConflict(text="再試行できる状態ではありません")
+        return web.json_response({"retried": n})
 
     async def api_sched_del(req):
         sid = req.match_info["sid"]
@@ -1308,8 +1373,8 @@ async def start_web():
         web.get("/thumb/{id}/{name}", thumb), web.get("/api/history/{work}", api_history),
         web.post("/api/edit", api_edit), web.get("/edited/{id}/{name}", edited_file),
         web.get("/api/profiles", api_profiles), web.post("/api/rewrite", api_rewrite),
-        web.post("/api/post", api_post), web.post("/api/bulk", api_bulk), web.post("/api/delete_work", api_delete_work), web.post("/api/affiliate", api_affiliate), web.post("/api/imps", api_imps_start), web.get("/api/imps/{job}", api_imps_status), web.post("/api/shadowban", api_sb_start), web.get("/api/shadowban/{job}", api_sb_status), web.post("/api/imp_alert", api_imp_alert), web.get("/api/bulk/{job}", api_bulk_status), web.post("/api/move", api_move), web.get("/api/schedule", api_sched_list),
-        web.post("/api/schedule", api_sched_add), web.delete("/api/schedule/{sid}", api_sched_del), web.get("/api/job/{job}", api_job),
+        web.post("/api/post", api_post), web.post("/api/bulk", api_bulk), web.post("/api/delete_work", api_delete_work), web.post("/api/affiliate", api_affiliate), web.post("/api/weight", api_weight), web.post("/api/imps", api_imps_start), web.get("/api/imps/{job}", api_imps_status), web.post("/api/shadowban", api_sb_start), web.get("/api/shadowban/{job}", api_sb_status), web.post("/api/imp_alert", api_imp_alert), web.get("/api/bulk/{job}", api_bulk_status), web.post("/api/move", api_move), web.get("/api/schedule", api_sched_list),
+        web.post("/api/schedule", api_sched_add), web.delete("/api/schedule/{sid}", api_sched_del), web.post("/api/schedule/{sid}/retry", api_sched_retry), web.get("/api/job/{job}", api_job),
     ])
     runner = web.AppRunner(app)
     await runner.setup()

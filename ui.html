@@ -274,6 +274,10 @@ async function drawDrawer(w){
           <button class="btn primary" id="affsave">保存</button><button class="btn" id="affcopy" ${w.affiliate?'':'disabled'}>コピー</button></div>
         <div class="row" style="margin-top:8px"><button class="btn primary" id="affopen">↗ MyFansアフィリンクを作成</button></div>
         <div class="note" id="affnote">${w.affiliate?'':'「MyFansアフィリンクを作成」を押すと作成ページが開きます。できたリンクをここに貼り付けて「保存」を押してください。'}</div></section>`}
+      ${IS_ENT?'':`<section class="sec"><h3>選ばれやすさ(一括予約のランダム選択)</h3>
+        <div class="affrow"><input id="wt" type="number" min="0" max="10" step="0.5" value="${w.weight==null?1:w.weight}" style="max-width:110px" aria-label="選ばれやすさ">
+          <button class="btn primary" id="wtsave">保存</button></div>
+        <div class="note" id="wtnote">標準=1 / 2にすると標準の2倍選ばれやすい / 0.5で半分 / 0で自動選択から外す(0〜10)。作品ごとの確率は「この作品の重み ÷ 全作品の重みの合計」です。</div></section>`}
       <section class="sec"><h3>作品URL</h3>${w.urls.length?w.urls.map(u=>`<div class="urlrow"><span class="site ${u.site}">${u.site}</span>
         <a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a>
         <button class="btn sm" data-copyurl="${esc(u.url)}">コピー</button><span class="note" style="margin:0">${fmt(u.added_at)}</span></div>`).join('')
@@ -300,6 +304,19 @@ async function drawDrawer(w){
     try{await api('/api/delete_work',{method:'POST',body:JSON.stringify({work_id:w.work_id})});closeDrawer();await load();toast('作品を削除しました(_trash に移動)');}
     catch(e){toast('削除に失敗: '+e.message,true);}
   };
+  const wt=$('#wt');
+  if(wt){
+    const wsave=async()=>{
+      const v=Number(wt.value);
+      if(!(v>=0&&v<=10)){toast('0〜10の数値を入れてください',true);return;}
+      try{
+        const r=await api('/api/weight',{method:'POST',body:JSON.stringify({work_id:w.work_id,weight:v})});
+        w.weight=r.weight;$('#wtnote').textContent='保存しました ✓';toast('選ばれやすさを保存しました ✓');
+      }catch(e){toast('保存に失敗: '+e.message,true);}
+    };
+    $('#wtsave').onclick=wsave;
+    wt.addEventListener('keydown',e=>{if(e.key==='Enter')wsave();});
+  }
   const aff=$('#aff');
   if(aff){
     const note=$('#affnote'),cp=$('#affcopy');
@@ -785,11 +802,19 @@ function drawSched(){
     return `<div class="srow"><div class="when">${esc(fmtAt(x.at))}${x.status==='pending'?`<div class="note" style="margin:2px 0 0">${esc(remain(x.at))}</div>`:''}</div><div class="main"><b>${esc(x.profile_name)}</b> ${badge(st[0],esc(st[1]))}
       <div class="stx">${esc(x.text)}</div>${x.error?`<div class="note" style="color:var(--err)">${esc(x.error)}</div>`:''}
       ${x.link?`<a href="${esc(x.link)}" target="_blank" rel="noopener">X で開く</a>`:''}</div>
-      <button class="btn sdel" data-s="${esc(x.id)}" ${x.status==='running'?'disabled':''}>${x.status==='pending'?'取り消す':'削除'}</button></div>`;}).join('');
+      <div class="row" style="flex-direction:column;gap:6px">${x.status==='failed'||x.status==='missed'?`<button class="btn primary" data-retry="${esc(x.id)}">再試行</button>`:''}<button class="btn sdel" data-s="${esc(x.id)}" ${x.status==='running'?'disabled':''}>${x.status==='pending'?'取り消す':'削除'}</button></div></div>`;}).join('');
+  const nfail=SCHED.filter(x=>x.status==='failed'||x.status==='missed').length;
   pn.innerHTML=`<div class="sheet"><header><h2>予約投稿</h2><button class="iconbtn" id="sclose" aria-label="閉じる">✕</button></header>
-    <div class="content">${rows||'<div class="note">予約はありません。投稿画面の最後のステップで「日時を指定して予約」を選ぶと追加できます。</div>'}
+    <div class="content">${nfail?`<div style="margin-bottom:10px"><button class="btn primary" id="retryall">失敗・見送り ${nfail}件をすべて再試行</button></div>`:''}${rows||'<div class="note">予約はありません。投稿画面の最後のステップで「日時を指定して予約」を選ぶと追加できます。</div>'}
     <div class="note">予約時刻にこのMacで Bot が起動している必要があります。時刻を${30}分以上過ぎて起動した場合は、投稿せず「見送り」になります。</div></div></div>`;
   $('#sclose').onclick=closeSched;
+  const retry=async(id,btn)=>{
+    if(btn)btn.disabled=true;
+    try{const r=await api('/api/schedule/'+id+'/retry',{method:'POST'});toast(r.retried?`${r.retried}件を再試行します(数十秒以内に投稿)`:'再試行できる予約がありません',!r.retried);}
+    catch(e){toast('再試行に失敗: '+e.message,true);}
+    refreshSchedCount();};
+  const ra=$('#retryall');if(ra)ra.onclick=()=>retry('all',ra);
+  pn.querySelectorAll('[data-retry]').forEach(b=>b.onclick=()=>retry(b.dataset.retry,b));
   pn.querySelectorAll('.sdel').forEach(b=>b.onclick=async()=>{
     try{await api('/api/schedule/'+b.dataset.s,{method:'DELETE'});}catch(e){toast('失敗: '+e.message,true);}refreshSchedCount();});
 }
