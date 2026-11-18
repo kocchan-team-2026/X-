@@ -33,7 +33,9 @@ def load_env() -> None:
 
 
 load_env()
-TOKEN = os.environ["DISCORD_BOT_TOKEN"]
+TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
+if not TOKEN:
+    sys.exit(".env に DISCORD_BOT_TOKEN がありません。./setup.sh を実行するか、.env.example を .env にコピーして入力してください")
 # ボード種別: `python bot.py` = 普通用 / `python bot.py ent` = エンタメ用
 ENT = len(sys.argv) > 1 and sys.argv[1] == "ent"
 BOARD_NAME = "エンタメ" if ENT else "普通"
@@ -740,7 +742,7 @@ async def run_bulk(job: str, profile_ids: list[str], start: datetime, end: datet
         st["errors"].append(str(e)[:200])
 
 
-IMP_TARGET = int(os.environ.get("IMP_TARGET", "5000"))  # このインプ数に達したら Xdeck が通知する
+IMP_TARGET = int(os.environ.get("IMP_TARGET", "2500"))  # このインプ数に達したら Xdeck が通知する
 
 
 def register_imp_alert(url: str) -> bool:
