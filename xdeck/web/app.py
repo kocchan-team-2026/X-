@@ -3,14 +3,14 @@ from pathlib import Path
 
 from aiohttp import web
 
-from ..config import ENT, GALLERY_URL, PORT, PORT_ENT, PORT_NORMAL
+from ..config import ENT, GALLERY_URL, PORT, PORT_ENT, PORT_ADULT
 from . import routes_accounts, routes_schedule, routes_works
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 
 def favicon_svg() -> str:
-    c1, c2 = ("#ff8a5c", "#e0357a") if ENT else ("#4a82f2", "#1d4fd0")  # 普通=青 / エンタメ=オレンジ〜ピンク
+    c1, c2 = ("#ff8a5c", "#e0357a") if ENT else ("#4a82f2", "#1d4fd0")  # アダルト=青 / エンタメ=オレンジ〜ピンク
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 824 824"><defs>'
             f'<linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{c1}"/>'
             f'<stop offset="1" stop-color="{c2}"/></linearGradient></defs>'
@@ -26,8 +26,8 @@ def page() -> str:
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     html = html.replace("__BN__", "(エンタメ)" if ENT else "").replace("__ENT__", "true" if ENT else "false")
     cur = 'aria-current="page"'
-    return (html.replace("__P_N__", PORT_NORMAL).replace("__P_E__", PORT_ENT)
-            .replace("__A_N__", "" if ENT else cur).replace("__A_E__", cur if ENT else ""))
+    return (html.replace("__P_A__", PORT_ADULT).replace("__P_E__", PORT_ENT)
+            .replace("__A_A__", "" if ENT else cur).replace("__A_E__", cur if ENT else ""))
 
 
 async def index(_):

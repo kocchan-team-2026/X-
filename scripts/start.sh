@@ -1,5 +1,5 @@
 #!/bin/bash
-# ボード(普通用 + 設定があればエンタメ用)を起動し、普通用ボードをブラウザで開く。
+# ボード(アダルト用 + 設定があればエンタメ用)を起動し、アダルト用ボードをブラウザで開く。
 # Finder/Spotlight から開いたときは PATH が最小限なので、ffmpeg などの場所を足しておく。
 export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 cd "$(dirname "$0")/.." || exit 1  # プロジェクト直下へ

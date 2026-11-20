@@ -42,7 +42,7 @@ PY
     }
     read -r -s -p "Discord Bot のトークン(入力は表示されません): " v; echo; [ -n "$v" ] && set_kv DISCORD_BOT_TOKEN "$v"
     read -r -s -p "Xdeck の API トークン(入力は表示されません): " v; echo; [ -n "$v" ] && set_kv XDECK_TOKEN "$v"
-    read -r -p "普通用の Discord チャンネルID(カンマ区切り。空=エンタメ用以外の全チャンネル): " v; [ -n "$v" ] && set_kv CHANNEL_IDS "$v"
+    read -r -p "アダルト用の Discord チャンネルID(カンマ区切り。空=エンタメ用以外の全チャンネル): " v; [ -n "$v" ] && set_kv CHANNEL_IDS "$v"
     read -r -p "エンタメ用の Discord チャンネルID(空=エンタメ用ボードを使わない): " v; [ -n "$v" ] && set_kv CHANNEL_IDS_ENT "$v"
     chmod 600 .env
     echo ".env を作りました"

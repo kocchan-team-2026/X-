@@ -1,6 +1,6 @@
 """旧レイアウト(saved/・saved_ent/)から data/<board>/{posts,state}/ への移行。
 
-起動のたびに呼ばれ、旧フォルダがなければ何もしない。普通用・エンタメ用のボードが同時に起動しても
+起動のたびに呼ばれ、旧フォルダがなければ何もしない。アダルト用・エンタメ用のボードが同時に起動しても
 重複しないよう、最初に旧フォルダを atomic に rename できたほうだけが仕分けを行う。
 """
 import sys
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import DATA_ROOT, ROOT
 
-LEGACY = {"normal": ROOT / "saved", "ent": ROOT / "saved_ent"}
+LEGACY = {"adult": ROOT / "saved", "ent": ROOT / "saved_ent"}
 
 
 def _migrate(legacy: Path, board: Path) -> None:

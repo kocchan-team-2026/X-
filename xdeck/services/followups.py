@@ -1,4 +1,4 @@
-"""インプ達成時の自動リプ(普通用=アフィリエイトリンク / エンタメ用=普通用の最近の投稿URL)。"""
+"""インプ達成時の自動リプ(アダルト用=アフィリエイトリンク / エンタメ用=アダルト用の最近の投稿URL)。"""
 import asyncio
 import json
 import re
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..api_client import api
 from ..config import (ENT, FOLLOWUP_MAX_TRIES, FOLLOWUP_TEXT, FOLLOWUP_TEXT_ENT, FOLLOWUP_WINDOW_H,
-                      NORMAL_STATE_DIR, RECOMMEND_N, STATE_DIR)
+                      ADULT_STATE_DIR, RECOMMEND_N, STATE_DIR)
 from ..storage import append_posts_log, read_posts_log
 from .works import work_affiliate
 
@@ -42,9 +42,9 @@ def posted_tweets(d: Path | None = None) -> dict[str, dict]:
     return out
 
 
-def recent_normal_urls(n: int = RECOMMEND_N) -> list[str]:
-    """普通用ボードで最近投稿した投稿のURLを新しい順にn件(なるべく別アカウントから選ぶ)"""
-    rows = sorted(posted_tweets(NORMAL_STATE_DIR).items(), key=lambda kv: kv[1]["at"], reverse=True)
+def recent_adult_urls(n: int = RECOMMEND_N) -> list[str]:
+    """アダルト用ボードで最近投稿した投稿のURLを新しい順にn件(なるべく別アカウントから選ぶ)"""
+    rows = sorted(posted_tweets(ADULT_STATE_DIR).items(), key=lambda kv: kv[1]["at"], reverse=True)
     picked: list[tuple[str, str]] = []
     seen: set[str] = set()
     for tid, m in rows:  # まず別アカウントを優先
@@ -89,7 +89,7 @@ async def post_followup(profile_id: str, tweet_id: str, text: str) -> str:
 
 
 async def run_followups() -> None:
-    """インプ達成(Xdeck のインプ通知が reached)した投稿に、同じアカウントから1つ目のリプ(普通用=「続きです〜」/エンタメ用=「おすすめです〜」)を出し、\n    続けてリンクを1件ずつリプでつなげる(普通用=アフィリエイトリンク/エンタメ用=普通用の最近の投稿URL3件)"""
+    """インプ達成(Xdeck のインプ通知が reached)した投稿に、同じアカウントから1つ目のリプ(アダルト用=「続きです〜」/エンタメ用=「おすすめです〜」)を出し、\n    続けてリンクを1件ずつリプでつなげる(アダルト用=アフィリエイトリンク/エンタメ用=アダルト用の最近の投稿URL3件)"""
     alerts = (await asyncio.to_thread(api, "GET", "imp-alerts/list"))["data"]["alerts"]
     reached = [a for a in alerts if a.get("status") == "reached"]
     st = fu_load()
@@ -114,11 +114,11 @@ async def run_followups() -> None:
             continue
         s = st.setdefault(tid, {"state": "waiting", "tries": 0})
         reached_at = datetime.fromtimestamp((a.get("reachedAt") or 0) / 1000)
-        if ENT:  # エンタメ用: 普通用の最近の投稿URLをおすすめとして1件ずつ貼る
-            links = await asyncio.to_thread(recent_normal_urls)
+        if ENT:  # エンタメ用: アダルト用の最近の投稿URLをおすすめとして1件ずつ貼る
+            links = await asyncio.to_thread(recent_adult_urls)
             first = FOLLOWUP_TEXT_ENT
-            lack = "普通用の投稿が見つかりません"
-        else:    # 普通用: 作品のアフィリエイトリンクを貼る
+            lack = "アダルト用の投稿が見つかりません"
+        else:    # アダルト用: 作品のアフィリエイトリンクを貼る
             url = await asyncio.to_thread(work_affiliate, m["work_id"])
             links = [url] if url else []
             first = FOLLOWUP_TEXT
