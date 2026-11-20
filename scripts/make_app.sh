@@ -1,8 +1,8 @@
 #!/bin/bash
 # macOS アプリ「Xdeck補助.app」を作る。開くと start.sh が走り、ボードがブラウザで開く。
-# 使い方: ./make_app.sh [作成先フォルダ(初期値: ~/Applications)]
+# 使い方: ./scripts/make_app.sh [作成先フォルダ(初期値: ~/Applications)]
 set -e
-REPO="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="${1:-$HOME/Applications}"
 APP="$DEST/Xdeck補助.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -21,9 +21,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 cat > "$APP/Contents/MacOS/launcher" <<LAUNCH
 #!/bin/bash
-exec "$REPO/start.sh"
+exec "$REPO/scripts/start.sh"
 LAUNCH
 chmod +x "$APP/Contents/MacOS/launcher"
 touch "$APP"
 echo "作成しました: $APP"
-echo "(このフォルダを移動したら、./make_app.sh をもう一度実行してください)"
+echo "(このフォルダを移動したら、./scripts/make_app.sh をもう一度実行してください)"

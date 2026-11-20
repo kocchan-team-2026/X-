@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>X保存ボード__BN__</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <h1>X保存ボード</h1>
+  <nav class="boards" aria-label="ボード切替"><a href="http://localhost:__P_N__/" __A_N__>普通</a><a href="http://localhost:__P_E__/" __A_E__>エンタメ</a></nav>
+  <input id="q" class="search" type="search" placeholder="本文・投稿者・URLで検索" aria-label="検索">
+  <div class="chips" id="chips" role="group" aria-label="絞り込み"></div>
+  <span class="count" id="count"></span>
+  <button class="btn" id="impbtn">📈 imp取得</button>
+  <button class="btn" id="sbbtn">🔍 シャドウバン判定</button>
+  <button class="btn" id="bulkbtn">🎲 一括予約</button>
+  <button class="btn" id="schedbtn">🕒 予約</button>
+  <button class="btn" id="refprof" title="Xdeckのアカウント・グループ情報を取得し直す">↻ アカウント更新</button>
+</header>
+<main class="grid" id="grid"></main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-label="作品の詳細" hidden></aside>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="投稿を作成" hidden></div>
+<div class="modal" id="schedpanel" role="dialog" aria-modal="true" aria-label="予約投稿" hidden></div>
+<div class="modal" id="bulkpanel" role="dialog" aria-modal="true" aria-label="一括予約" hidden></div>
+<div class="modal" id="imppanel" role="dialog" aria-modal="true" aria-label="最新投稿のimp" hidden></div>
+<div class="modal" id="sbpanel" role="dialog" aria-modal="true" aria-label="シャドウバン判定" hidden></div>
+<div id="toast" aria-live="polite"></div>
+
+<script>const IS_ENT=__ENT__;</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

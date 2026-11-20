@@ -1,9 +1,9 @@
 #!/bin/bash
 # 初回セットアップ: 仮想環境・依存パッケージ・.env・macOS アプリを用意する。
-# 使い方: ./setup.sh            (対話で .env を作り、アプリも作る)
-#         ./setup.sh --no-prompt (対話なし。.env は .env.example のコピーだけ作る)
+# 使い方: ./scripts/setup.sh            (対話で .env を作り、アプリも作る)
+#         ./scripts/setup.sh --no-prompt (対話なし。.env は .env.example のコピーだけ作る)
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."  # プロジェクト直下へ
 PROMPT=1; [ "$1" = "--no-prompt" ] && PROMPT=0
 
 echo "== 1/4 Python 環境 =="
@@ -56,10 +56,10 @@ grep -qE '^XDECK_TOKEN=.+' .env || echo "⚠ .env の XDECK_TOKEN が空です"
 
 echo "== 4/4 macOS アプリ =="
 if [ "$(uname)" = Darwin ]; then
-  chmod +x start.sh make_app.sh
-  ./make_app.sh
+  chmod +x scripts/*.sh
+  scripts/make_app.sh
 else
-  echo "macOS 以外では、./start.sh でボードを起動してください"
+  echo "macOS 以外では、./scripts/start.sh でボードを起動してください"
 fi
 echo
-echo "完了です。「Xdeck補助」アプリ(または ./start.sh)を開くとボードが開きます。詳しくは README.md を見てください。"
+echo "完了です。「Xdeck補助」アプリ(または ./scripts/start.sh)を開くとボードが開きます。詳しくは README.md を見てください。"

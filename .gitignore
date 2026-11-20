@@ -1,7 +1,9 @@
 .env
 .venv/
+data/
+# 旧レイアウト(移行前のデータ)
 saved/
+saved_ent/
 __pycache__/
 *.pyc
 .DS_Store
-saved_ent/

@@ -24,17 +24,17 @@ Discord に貼った X(Twitter)の投稿リンクから、本文・画像・動�
 ```bash
 git clone https://github.com/kocchan-team-2026/X-.git
 cd X-
-./setup.sh
+./scripts/setup.sh
 ```
 
-`setup.sh` が次をまとめて行います。
+`scripts/setup.sh` が次をまとめて行います。
 
 1. `.venv` を作り、依存パッケージを入れる
 2. ffmpeg / Claude Code / Xdeck が入っているか確認する
 3. `.env` を対話で作る(トークンは入力しても画面に表示されません)
 4. `~/Applications/Xdeck補助.app` を作る(開くとボードが立ち上がってブラウザで開きます)
 
-あとは **「Xdeck補助」アプリ**(Spotlight で `Xdeck補助`)か、`./start.sh` を開くだけです。
+あとは **「Xdeck補助」アプリ**(Spotlight で `Xdeck補助`)か、`./scripts/start.sh` を開くだけです。
 
 ### 1. Discord Bot を作る
 
@@ -97,8 +97,10 @@ Xdeck の **グループ名** で、ボードごとの投稿対象が決まり�
 
 すべて手元のフォルダに保存され、`.gitignore` で Git には入りません。
 
-- `saved/` … 普通用の投稿・動画・予約・履歴・アイコンなど
-- `saved_ent/` … エンタメ用
+- `data/normal/` … 普通用 / `data/ent/` … エンタメ用(それぞれ中は同じ構成)
+  - `posts/` … 保存した投稿(動画・画像・本文。1投稿=1フォルダ)
+  - `state/` … 予約・投稿履歴・自動リプの状態・アイコンなどの管理データ
+- 旧バージョンの `saved/` `saved_ent/` が残っている場合は、起動時に自動で `data/` へ移します
 - `.env` … トークン類
 - ログ: `~/Library/Logs/xboard.log`
 
@@ -108,18 +110,24 @@ Xdeck の **グループ名** で、ボードごとの投稿対象が決まり�
 |---|---|
 | アプリを開いてもボードが開かない | `~/Library/Logs/xboard.log` を見る。`.env` のトークン、Xdeck の起動を確認 |
 | Discord にリンクを貼っても反応しない | MESSAGE CONTENT INTENT がオンか、`CHANNEL_IDS` が合っているか、Bot がそのチャンネルを見られるか |
-| 予約で `No such file or directory: 'ffprobe'` | `brew install ffmpeg`。アプリ(`start.sh`)は `/usr/local/bin` と `/opt/homebrew/bin` を自動で探します |
-| フォルダを移動したらアプリが動かない | `./make_app.sh` をもう一度実行 |
-| 更新を取り込みたい | `git pull` → アプリを開き直す(依存が増えたときは `./setup.sh` をもう一度) |
+| 予約で `No such file or directory: 'ffprobe'` | `brew install ffmpeg`。アプリ(`scripts/start.sh`)は `/usr/local/bin` と `/opt/homebrew/bin` を自動で探します |
+| フォルダを移動したらアプリが動かない | `./scripts/make_app.sh` をもう一度実行 |
+| 更新を取り込みたい | `git pull` → アプリを開き直す(依存が増えたときは `./scripts/setup.sh` をもう一度) |
 
 ## ファイル構成
 
 ```
-bot.py            Discord Bot + ボードのサーバー(普通用 / `python bot.py ent` でエンタメ用)
-ui.html           ボードの画面
-start.sh          ボードを起動してブラウザで開く
-make_app.sh       「Xdeck補助.app」を作る
-setup.sh          初回セットアップ
-.env.example      設定の雛形
-assets/           アプリのアイコン
+xdeck/               コード本体(起動: python -m xdeck [ent])
+  config.py            設定・定数・データの保存先
+  api_client.py        Xdeck API クライアント
+  storage.py           予約・投稿履歴の読み書き
+  media.py rewrite.py  動画加工 / 本文リライト
+  discord_bot.py       Discord Bot(リンクの保存)
+  migrate.py           旧 saved/ から data/ への移行
+  services/            機能: works avatars scheduler bulk shadowban imps followups
+  web/                 ボードのサーバー(routes_*.py)と画面(static/ の html・css・js)
+scripts/             setup.sh(初回) / start.sh(起動) / make_app.sh(アプリ作成)
+assets/              アプリのアイコン
+data/                保存データ(Git に入りません)
+.env.example         設定の雛形
 ```
