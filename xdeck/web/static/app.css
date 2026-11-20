@@ -17,7 +17,6 @@ button{font:inherit;color:inherit;cursor:pointer}
 .search{flex:1;min-width:220px;max-width:420px;background:var(--surface);border:1px solid var(--border);border-radius:10px;
   color:var(--text);padding:8px 12px;font:inherit}
 .search::placeholder{color:var(--muted)}
-.chips{display:flex;gap:6px;flex-wrap:wrap}
 .chip{background:transparent;border:1px solid var(--border);border-radius:999px;padding:4px 12px;color:var(--muted)}
 .chip:hover{border-color:#4a5163;color:var(--text)}
 .chip[aria-pressed=true]{background:#24335a;border-color:#4a82f2;color:#fff}

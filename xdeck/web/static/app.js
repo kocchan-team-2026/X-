@@ -6,19 +6,13 @@ function toast(msg,err){const d=document.createElement('div');d.className='toast
 async function copyTo(url,label){try{const r=await fetch(url,{method:'POST'});if(!r.ok)throw 0;toast(label+'をコピーしました ✓');}catch{toast(label+'のコピーに失敗しました',true);}}
 
 /* ================= 一覧 ================= */
-let works=[], filter='all', query='', openId=null, openSig='';
-const FILTERS=[['all','すべて'],['video','動画あり'],['MyFans','MyFans'],['FANZA','FANZA'],['nourl','作品URLなし']];
-function drawChips(){$('#chips').innerHTML=FILTERS.map(([k,l])=>`<button class="chip" data-f="${k}" aria-pressed="${filter===k}">${l}</button>`).join('');}
-$('#chips').addEventListener('click',e=>{const b=e.target.closest('.chip');if(!b)return;filter=b.dataset.f;drawChips();render();});
+let works=[], query='', openId=null, openSig='';
 $('#refprof').onclick=e=>refreshProfiles(e.currentTarget);
 $('#q').addEventListener('input',e=>{query=e.target.value.trim().toLowerCase();render();});
 
 const thumbOf=w=>{for(const p of w.posts){if(p.videos[0])return `/thumb/${p.id}/${p.videos[0]}`;if(p.images[0])return `/files/${p.id}/${p.images[0]}`;}return null;};
 const countVideos=w=>w.posts.reduce((n,p)=>n+p.videos.length,0);
 function matches(w){
-  if(filter==='video'&&!countVideos(w))return false;
-  if(filter==='nourl'&&w.urls.length)return false;
-  if((filter==='MyFans'||filter==='FANZA')&&!w.urls.some(u=>u.site===filter))return false;
   if(!query)return true;
   const hay=[...w.posts.map(p=>p.author+' '+p.text),...w.urls.map(u=>u.url)].join(' ').toLowerCase();
   return hay.includes(query);
@@ -635,7 +629,6 @@ $('#schedbtn').onclick=openSched;
 $('#schedpanel').addEventListener('click',e=>{if(e.target.id==='schedpanel')closeSched();});
 setInterval(refreshSchedCount,30000);refreshSchedCount();
 document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!$('#imppanel').hidden)closeImp();else if(!$('#sbpanel').hidden)closeSb();else if(!$('#bulkpanel').hidden)closeBulk();else if(!$('#schedpanel').hidden)closeSched();else if(!$('#modal').hidden)closePost();else if(openId)closeDrawer();});
-drawChips();
 // URL から直接開ける: #w=作品ID / #post=作品ID&step=2
 load().then(()=>{
   const h=new URLSearchParams(location.hash.slice(1));
