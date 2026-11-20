@@ -57,6 +57,9 @@ PORT_ENT = os.environ.get("GALLERY_PORT_ENT", "8766")
 PORT = int(PORT_ENT if ENT else PORT_ADULT)
 GALLERY_URL = f"http://localhost:{PORT}"
 
+# ---- Discord ----
+DISCORD_URL = os.environ.get("DISCORD_URL", "")  # サイドバーの「Discordを開く」の飛び先。空なら Bot が見ているサーバー/チャンネルから自動で作る
+
 # ---- Xdeck ----
 XDECK_URL = os.environ.get("XDECK_URL", "http://127.0.0.1:39150/api/v1")
 XDECK_TOKEN = os.environ.get("XDECK_TOKEN", "")

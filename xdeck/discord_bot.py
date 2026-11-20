@@ -5,6 +5,7 @@ import discord
 
 from .config import (CHANNEL_IDS, ENT, ENT_CHANNELS, FOLLOWUP_ON, GALLERY_URL, POSTS_DIR, STATE_DIR,
                      URL_RE)
+from .services import discord_link
 from .services.followups import followup_loop
 from .services.scheduler import scheduler_loop
 from .services.works import add_work_urls, already_saved, find_work_urls, save_tweet
@@ -30,6 +31,10 @@ client = Bot(intents=intents)
 @client.event
 async def on_ready():
     print(f"logged in as {client.user} / data dir: {POSTS_DIR.parent}")
+    # 設定したチャンネルのうち、Bot から見えるものがあればそのチャンネルを、なければ最初のサーバーを開く
+    ch = next((c for c in (client.get_channel(i) for i in sorted(CHANNEL_IDS)) if c), None)
+    guild = ch.guild if ch else (client.guilds[0] if client.guilds else None)
+    discord_link.set_from_bot(guild.id if guild else None, ch.id if ch else None)
 
 
 @client.event

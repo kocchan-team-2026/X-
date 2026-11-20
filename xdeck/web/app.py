@@ -4,6 +4,7 @@ from pathlib import Path
 from aiohttp import web
 
 from ..config import ENT, GALLERY_URL, PORT, PORT_ENT, PORT_ADULT
+from ..services import discord_link
 from . import routes_accounts, routes_schedule, routes_works
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -38,6 +39,11 @@ async def favicon(_):
     return web.Response(text=favicon_svg(), content_type="image/svg+xml")
 
 
+async def api_discord(_):
+    """サイドバーの「Discordを開く」の飛び先(Bot の接続前は空)"""
+    return web.json_response({"url": discord_link.get_url()})
+
+
 async def _no_stale_static(req: web.Request, resp: web.StreamResponse) -> None:
     """画面ファイル(css/js)を更新したあと、ブラウザに古い版を使わせない(毎回、更新の有無を確認させる)"""
     if req.path.startswith("/static/"):
@@ -47,7 +53,8 @@ async def _no_stale_static(req: web.Request, resp: web.StreamResponse) -> None:
 async def start_web() -> None:
     app = web.Application()
     app.on_response_prepare.append(_no_stale_static)
-    app.add_routes([web.get("/", index), web.get("/favicon.svg", favicon), web.get("/favicon.ico", favicon)])
+    app.add_routes([web.get("/", index), web.get("/favicon.svg", favicon), web.get("/favicon.ico", favicon),
+                    web.get("/api/discord", api_discord)])
     app.add_routes(routes_works.routes)
     app.add_routes(routes_schedule.routes)
     app.add_routes(routes_accounts.routes)

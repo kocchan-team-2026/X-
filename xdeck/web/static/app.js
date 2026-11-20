@@ -8,6 +8,13 @@ async function copyTo(url,label){try{const r=await fetch(url,{method:'POST'});if
 /* ================= 一覧 ================= */
 let works=[], query='', openId=null, openSig='';
 $('#refprof').onclick=e=>refreshProfiles(e.currentTarget);
+function applySide(c){const t=$('#sidetg');$('#app').classList.toggle('collapsed',c);t.textContent=c?'▶':'◀';
+  t.title=t.ariaLabel=c?'サイドバーを開く':'サイドバーを畳む';}
+{let sv=null;try{sv=localStorage.getItem('sideCollapsed');}catch{}applySide(sv==null?innerWidth<1000:sv==='1');}
+$('#sidetg').onclick=()=>{const c=!$('#app').classList.contains('collapsed');applySide(c);try{localStorage.setItem('sideCollapsed',c?'1':'0');}catch{}};
+// Discordを開くボタン(Bot の接続が終わるまで、数秒おいて何度か確認する)
+(function discordLink(n){api('/api/discord').then(r=>{if(r.url){const a=$('#discordbtn');a.href=r.url;a.hidden=false;}else if(n<8)setTimeout(()=>discordLink(n+1),2500);}).catch(()=>{});})(0);
+api('/api/profiles').then(p=>setSync(p.length)).catch(()=>{$('#syncmeta').textContent='アカウント未取得';});
 $('#q').addEventListener('input',e=>{query=e.target.value.trim().toLowerCase();render();});
 
 const thumbOf=w=>{for(const p of w.posts){if(p.videos[0])return `/thumb/${p.id}/${p.videos[0]}`;if(p.images[0])return `/files/${p.id}/${p.images[0]}`;}return null;};
@@ -59,20 +66,22 @@ setInterval(()=>{if($('#modal').hidden)load();},10000);
 
 /* ================= 詳細ドロワー ================= */
 let PROFILES=null;
+const setLb=(b,txt)=>{const l=b.querySelector('.lb');if(l)l.textContent=txt;};
+function setSync(n){const t=new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'});$('#syncmeta').innerHTML=`${n}アカウント<br>最終同期 <b>${t}</b>`;}
 async function refreshProfiles(btn){
-  if(btn){btn.disabled=true;btn.textContent='同期中…';}
+  if(btn){btn.disabled=true;setLb(btn,'同期中…');}
   try{
     const old=PROFILES||await api('/api/profiles').catch(()=>[]);
     api('/api/avatars/refresh',{method:'POST'}).then(()=>setTimeout(async()=>{try{PROFILES=await api('/api/profiles');if(P&&P.step===0)renderPost();}catch(e){}},60000)).catch(()=>{});
     const nw=await api('/api/profiles');
     const key=a=>a.id+'|'+a.name+'|'+a.group, os=new Set(old.map(key));
     const changed=nw.filter(a=>!os.has(key(a))).length, gone=old.filter(a=>!nw.some(b=>b.id===a.id)).length;
-    PROFILES=nw;
+    PROFILES=nw;setSync(nw.length);
     const gs=new Set(nw.map(a=>a.group)).size;
     toast(`同期しました: ${nw.length}アカウント / ${gs}グループ`+((PROFILES&&old.length&&(changed||gone))?`(変更${changed}・削除${gone})`:''));
     if(P&&P.step===0)renderPost();
   }catch(e){toast('同期に失敗: '+e.message,true);}
-  finally{const b=$('#refprof');if(b){b.disabled=false;b.textContent='↻ Xdeckとアカウント同期';}
+  finally{const b=$('#refprof');if(b){b.disabled=false;setLb(b,'Xdeckとアカウント同期');}
     const c=$('#pref');if(c){c.disabled=false;c.textContent='↻ 同期';}}
 }
 const avt=(p,s)=>p&&p.av?`<img class="av" src="/api/avatar/${p.id}?v=${p.av}" alt="" loading="lazy"${s?` style="width:${s}px;height:${s}px"`:''}>`:`<span class="av ph"${s?` style="width:${s}px;height:${s}px"`:''}>${esc((p&&p.name||'?').slice(0,1))}</span>`;
@@ -612,7 +621,7 @@ const SLBL={pending:['wait','🕒 待機中(時刻になると投稿)'],running:
 async function refreshSchedCount(){
   try{SCHED=await api('/api/schedule');}catch(e){return;}
   const n=SCHED.filter(x=>x.status==='pending'||x.status==='running').length;
-  $('#schedbtn').innerHTML='🕒 予約履歴'+(n?` <span class="badge">${n}</span>`:'');
+  {const bd=$('#schedbtn .badge');bd.textContent=n;bd.hidden=!n;}
   if(!$('#schedpanel').hidden)drawSched();
 }
 function remain(at){const m=Math.round((new Date(at)-Date.now())/6e4);
