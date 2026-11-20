@@ -22,6 +22,7 @@ Discord に貼った X(Twitter)の投稿リンクから、本文・画像・動�
 ## セットアップ(5分)
 
 ```bash
+mkdir -p ~/Developer && cd ~/Developer   # ~/Downloads や ~/Documents は避ける(macOS の保護でアプリが動かなくなります)
 git clone https://github.com/kocchan-team-2026/X-.git
 cd X-
 ./scripts/setup.sh
@@ -111,6 +112,7 @@ Xdeck の **グループ名** で、ボードごとの投稿対象が決まり�
 | アプリを開いてもボードが開かない | `~/Library/Logs/xboard.log` を見る。`.env` のトークン、Xdeck の起動を確認 |
 | Discord にリンクを貼っても反応しない | MESSAGE CONTENT INTENT がオンか、`CHANNEL_IDS` が合っているか、Bot がそのチャンネルを見られるか |
 | 予約で `No such file or directory: 'ffprobe'` | `brew install ffmpeg`。アプリ(`scripts/start.sh`)は `/usr/local/bin` と `/opt/homebrew/bin` を自動で探します |
+| アプリを開いてもボードが起動しない(ログに `Operation not permitted`) | プロジェクトが `~/Downloads` や `~/Documents` にあると、macOS の保護でアプリから実行できません。`~/Developer/` など保護されていない場所に置いてください(置き場所を変えたら `./scripts/make_app.sh`) |
 | フォルダを移動したらアプリが動かない | `./scripts/make_app.sh` をもう一度実行 |
 | 更新を取り込みたい | `git pull` → アプリを開き直す(依存が増えたときは `./scripts/setup.sh` をもう一度) |
 
