@@ -132,19 +132,14 @@ async def run_followups() -> None:
                 chain.append(s["reply1"])
             if not chain:
                 rid = await post_followup(m["profile_id"], tid, first)
-                if not rid:
-                    s.update(state="gave_up", error="1つ目のリプのIDを取得できず、リンクのリプができませんでした")
-                    fu_save(st)
-                    continue
-                chain.append(rid)
-                s["reply1"] = rid
+                if not rid:  # Xdeck は成功(ok)でもリプのIDを返さないことがある。元ツイートにぶら下げて続ける
+                    s["note_no_id"] = "1つ目のリプのIDが取れなかったため、リンクは元の投稿へのリプにしました"
+                chain.append(rid or tid)
+                s["reply1"] = rid or tid
                 fu_save(st)
             for link in links[len(chain) - 1:]:
                 rid = await post_followup(m["profile_id"], chain[-1], link)
-                if not rid:
-                    s.update(state="gave_up", error="リプのIDを取得できず、続きのリンクをつなげられませんでした")
-                    break
-                chain.append(rid)
+                chain.append(rid or chain[-1])  # IDが取れないときは同じ親にぶら下げる
                 fu_save(st)
             else:
                 s.update(state="done", at=datetime.now().isoformat(timespec="seconds"), work_id=m["work_id"],
