@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from ..api_client import JobTimeout, api, wait_job
-from ..config import (ENT, FOLLOWUP_MAX_TRIES, FOLLOWUP_TEXT, FOLLOWUP_TEXT_ENT, FOLLOWUP_WINDOW_H,
+from ..config import (ENT, FOLLOWUP_MAX_TRIES, LIKE_CHECK_MIN, LIKE_TARGET, LIKE_WINDOW_H, FOLLOWUP_TEXT, FOLLOWUP_TEXT_ENT, FOLLOWUP_WINDOW_H,
                       ADULT_STATE_DIR, RECOMMEND_N, STATE_DIR)
 from ..storage import append_posts_log, read_posts_log, write_json_atomic
 from .works import work_affiliate
@@ -83,6 +83,37 @@ async def post_followup(profile_id: str, tweet_id: str, text: str) -> str:
     return str(job.get("tweet_id") or "")
 
 
+_like_checked = datetime.min
+
+
+async def liked_enough(st: dict, mine: dict[str, dict]) -> list[dict]:
+    """このボードから最近(LIKE_WINDOW_H時間以内)投稿した投稿のうち、いいねが LIKE_TARGET 以上のもの。
+    Xdeck のインプ通知と同じ形({tweetId, reachedAt})で返す。確認は LIKE_CHECK_MIN 分おき"""
+    global _like_checked
+    if LIKE_TARGET <= 0 or datetime.now() - _like_checked < timedelta(minutes=LIKE_CHECK_MIN):
+        return []
+    _like_checked = datetime.now()
+    since = (datetime.now() - timedelta(hours=LIKE_WINDOW_H)).isoformat(timespec="seconds")
+    cands = {t: m for t, m in mine.items()
+             if m["at"] >= since and (st.get(t) or {}).get("state") not in ("baseline", "done", "gave_up")}
+    sem = asyncio.Semaphore(4)
+    hit: list[dict] = []
+
+    async def one(tid: str, m: dict) -> None:
+        async with sem:
+            try:
+                r = await asyncio.to_thread(api, "GET", "x/tweet", params={"profile_id": m["profile_id"], "tweet": tid}, timeout=90)
+                likes = ((r.get("data") or {}).get("counts") or {}).get("favorites") or 0
+            except Exception as e:  # noqa: BLE001
+                print(f"followup: いいね数の取得に失敗 {tid}: {str(e)[:80]}")
+                return
+        if likes >= LIKE_TARGET:
+            hit.append({"tweetId": tid, "reachedAt": datetime.now().timestamp() * 1000})
+
+    await asyncio.gather(*(one(t, m) for t, m in cands.items()))
+    return hit
+
+
 async def run_followups() -> None:
     """インプ達成(Xdeck のインプ通知が reached)した投稿に、同じアカウントから1つ目のリプ(アダルト用=「続きです〜」/エンタメ用=「おすすめです〜」)を出し、\n    続けてリンクを1件ずつリプでつなげる(アダルト用=アフィリエイトリンク/エンタメ用=アダルト用の最近の投稿URL3件)"""
     alerts = (await asyncio.to_thread(api, "GET", "imp-alerts/list"))["data"]["alerts"]
@@ -95,14 +126,14 @@ async def run_followups() -> None:
         st["_baseline"] = datetime.now().isoformat(timespec="seconds")
         fu_save(st)
         return
-    mine = None
+    mine = await asyncio.to_thread(posted_tweets)
+    have = {str(a["tweetId"]) for a in reached}
+    reached += [a for a in await liked_enough(st, mine) if a["tweetId"] not in have]  # いいね数での到達も同じ扱い
     for a in reached:
         tid = str(a["tweetId"])
         s = st.get(tid)
         if s and s.get("state") in ("baseline", "done", "gave_up"):
             continue
-        if mine is None:
-            mine = await asyncio.to_thread(posted_tweets)
         m = mine.get(tid)
         if not m:  # このボードで投稿したものではない
             st[tid] = {"state": "baseline"}

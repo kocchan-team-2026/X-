@@ -72,6 +72,9 @@ FOLLOWUP_ON = os.environ.get("FOLLOWUP", "1") != "0"                       # 0 �
 FOLLOWUP_TEXT = os.environ.get("FOLLOWUP_TEXT", "続きです〜")                  # アダルト用: リプの本文(この後ろにリンク)
 FOLLOWUP_TEXT_ENT = os.environ.get("FOLLOWUP_TEXT_ENT", "おすすめです〜")      # エンタメ用:1つ目のリプ本文
 RECOMMEND_N = int(os.environ.get("RECOMMEND_N", "3"))                      # おすすめとして貼るアダルト用投稿の数
+LIKE_TARGET = int(os.environ.get("LIKE_TARGET", "40"))  # このいいね数に達しても、インプ達成と同じく自動リプする(0で無効)
+LIKE_WINDOW_H = 48       # いいねを確認するのは、投稿からこの時間以内のもの
+LIKE_CHECK_MIN = 15      # いいねの確認間隔(分)
 FOLLOWUP_WINDOW_H = 24   # 到達後これを過ぎたらリンク未登録でも諦める
 FOLLOWUP_MAX_TRIES = 3
 
