@@ -17,14 +17,30 @@ function matches(w){
   const hay=[...w.posts.map(p=>p.author+' '+p.text),...w.urls.map(u=>u.url)].join(' ').toLowerCase();
   return hay.includes(query);
 }
+const hasMedia=w=>w.posts.some(p=>p.videos.length||p.images.length);
+const noAff=w=>!IS_ENT&&!(w.affiliate||'').trim();   // アダルト用: アフィリエイトリンク未登録
+const wtOf=w=>noAff(w)?0:Math.max(0,w.weight==null?1:Number(w.weight)||0);  // 未登録は重み0(一括予約で選ばれない)
+// 一括予約でこの作品が選ばれる確率(%)=この作品の重み ÷ 動画・画像のある全作品の重みの合計。エンタメ用・メディアなしは null
+function pctOf(w){
+  if(IS_ENT||!hasMedia(w))return null;
+  const tot=works.filter(hasMedia).reduce((n,x)=>n+wtOf(x),0);
+  return tot>0?wtOf(w)/tot*100:0;
+}
+const NOAFF_MSG='アフィリエイトリンクが未登録のため、一括予約では投稿されません(確率0%)。作品を開いてリンクを保存すると対象になります';
+const fmtPct=v=>(v>=10||v===0?Math.round(v):Math.round(v*10)/10)+'%';
 function render(){
-  const list=works.filter(matches);
+  let list=works.filter(matches);
+  if(!IS_ENT){  // 選ばれる確率が高い順(同じ確率なら従来どおり更新が新しい順)。動画・画像のない作品は最後
+    const pc=new Map(list.map(w=>[w,pctOf(w)??-1]));
+    list=list.sort((x,y)=>pc.get(y)-pc.get(x));
+  }
   $('#count').textContent=`${list.length} / ${works.length} 作品`;
   $('#grid').innerHTML=list.length?list.map(w=>{
-    const t=thumbOf(w),p=w.posts[0]||{},nv=countVideos(w);
-    return `<button class="card" data-w="${esc(w.work_id)}">
+    const t=thumbOf(w),p=w.posts[0]||{},nv=countVideos(w),pc=pctOf(w),off=!IS_ENT&&wtOf(w)<=0,na=noAff(w);
+    return `<button class="card${off?' off':''}" data-w="${esc(w.work_id)}"${off&&!na?' title="選ばれやすさ0: 一括予約の自動選択から外れています"':''}>
       <div class="thumb">${t?`<img src="${t}" loading="lazy" alt="">`:'<div class="none">メディアなし</div>'}
-        <div class="overlay">${nv?`<span class="pill">▶ 動画${nv}</span>`:''}<span class="pill">投稿${w.posts.length}</span></div></div>
+        ${na?`<span class="warn" title="${NOAFF_MSG}" aria-label="アフィリエイトリンク未登録">⚠</span>`:''}
+        <div class="overlay">${nv?`<span class="pill">▶ 動画${nv}</span>`:''}<span class="pill">投稿${w.posts.length}</span>${pc==null?'':`<span class="pill pct" title="一括予約で選ばれる確率">🎲 ${fmtPct(pc)}</span>`}</div></div>
       <div class="body"><div class="author">${esc(p.author||'(投稿なし)')}</div>
         <div class="excerpt">${esc(p.text||'')}</div>
         <div class="foot">${[...new Set(w.urls.map(u=>u.site))].map(s=>`<span class="site ${s}">${s}</span>`).join('')}
@@ -44,7 +60,7 @@ setInterval(()=>{if($('#modal').hidden)load();},10000);
 /* ================= 詳細ドロワー ================= */
 let PROFILES=null;
 async function refreshProfiles(btn){
-  if(btn){btn.disabled=true;btn.textContent='更新中…';}
+  if(btn){btn.disabled=true;btn.textContent='同期中…';}
   try{
     const old=PROFILES||await api('/api/profiles').catch(()=>[]);
     api('/api/avatars/refresh',{method:'POST'}).then(()=>setTimeout(async()=>{try{PROFILES=await api('/api/profiles');if(P&&P.step===0)renderPost();}catch(e){}},60000)).catch(()=>{});
@@ -53,11 +69,11 @@ async function refreshProfiles(btn){
     const changed=nw.filter(a=>!os.has(key(a))).length, gone=old.filter(a=>!nw.some(b=>b.id===a.id)).length;
     PROFILES=nw;
     const gs=new Set(nw.map(a=>a.group)).size;
-    toast(`更新しました: ${nw.length}アカウント / ${gs}グループ`+((PROFILES&&old.length&&(changed||gone))?`(変更${changed}・削除${gone})`:''));
+    toast(`同期しました: ${nw.length}アカウント / ${gs}グループ`+((PROFILES&&old.length&&(changed||gone))?`(変更${changed}・削除${gone})`:''));
     if(P&&P.step===0)renderPost();
-  }catch(e){toast('更新に失敗: '+e.message,true);}
-  finally{const b=$('#refprof');if(b){b.disabled=false;b.textContent='↻ アカウント更新';}
-    const c=$('#pref');if(c){c.disabled=false;c.textContent='↻ 更新';}}
+  }catch(e){toast('同期に失敗: '+e.message,true);}
+  finally{const b=$('#refprof');if(b){b.disabled=false;b.textContent='↻ Xdeckとアカウント同期';}
+    const c=$('#pref');if(c){c.disabled=false;c.textContent='↻ 同期';}}
 }
 const avt=(p,s)=>p&&p.av?`<img class="av" src="/api/avatar/${p.id}?v=${p.av}" alt="" loading="lazy"${s?` style="width:${s}px;height:${s}px"`:''}>`:`<span class="av ph"${s?` style="width:${s}px;height:${s}px"`:''}>${esc((p&&p.name||'?').slice(0,1))}</span>`;
 let avPoll=0;
@@ -85,7 +101,7 @@ async function drawDrawer(w){
       ${IS_ENT?'':`<section class="sec"><h3>選ばれやすさ(一括予約のランダム選択)</h3>
         <div class="affrow"><input id="wt" type="number" min="0" max="10" step="0.5" value="${w.weight==null?1:w.weight}" style="max-width:110px" aria-label="選ばれやすさ">
           <button class="btn primary" id="wtsave">保存</button></div>
-        <div class="note" id="wtnote">標準=1 / 2にすると標準の2倍選ばれやすい / 0.5で半分 / 0で自動選択から外す(0〜10)。作品ごとの確率は「この作品の重み ÷ 全作品の重みの合計」です。</div></section>`}
+        <div class="note" id="wtnote">${noAff(w)?'⚠ '+NOAFF_MSG+'。':''}標準=1 / 2にすると標準の2倍選ばれやすい / 0.5で半分 / 0で自動選択から外す(0〜10)。作品ごとの確率は「この作品の重み ÷ 全作品の重みの合計」です。</div></section>`}
       <section class="sec"><h3>作品URL</h3>${w.urls.length?w.urls.map(u=>`<div class="urlrow"><span class="site ${u.site}">${u.site}</span>
         <a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a>
         <button class="btn sm" data-copyurl="${esc(u.url)}">コピー</button><span class="note" style="margin:0">${fmt(u.added_at)}</span></div>`).join('')
@@ -119,7 +135,7 @@ async function drawDrawer(w){
       if(!(v>=0&&v<=10)){toast('0〜10の数値を入れてください',true);return;}
       try{
         const r=await api('/api/weight',{method:'POST',body:JSON.stringify({work_id:w.work_id,weight:v})});
-        w.weight=r.weight;$('#wtnote').textContent='保存しました ✓';toast('選ばれやすさを保存しました ✓');
+        w.weight=r.weight;render();$('#wtnote').textContent='保存しました ✓(この作品が選ばれる確率: '+(noAff(w)?'0%(アフィリエイトリンク未登録)':pctOf(w)==null?'対象外(動画・画像なし)':fmtPct(pctOf(w)))+')';toast('選ばれやすさを保存しました ✓');
       }catch(e){toast('保存に失敗: '+e.message,true);}
     };
     $('#wtsave').onclick=wsave;
@@ -132,7 +148,7 @@ async function drawDrawer(w){
       const v=aff.value.trim();
       try{
         const r=await api('/api/affiliate',{method:'POST',body:JSON.stringify({work_id:w.work_id,url:v})});
-        w.affiliate=r.affiliate;cp.disabled=!r.affiliate;
+        w.affiliate=r.affiliate;cp.disabled=!r.affiliate;render();
         note.textContent=r.affiliate?'保存しました ✓':'削除しました';toast(r.affiliate?'アフィリエイトリンクを保存しました ✓':'アフィリエイトリンクを削除しました');
       }catch(e){note.textContent='保存に失敗: '+e.message;toast('保存に失敗: '+e.message,true);}
     };
@@ -225,7 +241,7 @@ function stepAcc(){
   const ps=PROFILES||[],q=P.accQ.toLowerCase();
   const list=ps.filter(p=>!q||p.name.toLowerCase().includes(q)||p.group.includes(q));
   const groups=[...new Set(list.map(p=>p.group))];
-  return `<div class="field"><div class="row" style="justify-content:space-between;margin-bottom:6px"><label class="l" for="paccq" style="margin:0">投稿するアカウント</label><button class="btn" id="pref" style="padding:4px 10px">↻ 更新</button></div>
+  return `<div class="field"><div class="row" style="justify-content:space-between;margin-bottom:6px"><label class="l" for="paccq" style="margin:0">投稿するアカウント</label><button class="btn" id="pref" style="padding:4px 10px" title="Xdeckのアカウント情報と同期する">↻ 同期</button></div>
     <input id="paccq" type="text" placeholder="名前・グループで絞り込み" value="${esc(P.accQ)}"></div>
     ${!PROFILES?'<div class="note">アカウント一覧を読み込み中…</div>':`<div class="accs" role="radiogroup" aria-label="アカウント">${groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(p=>`<button class="acc" role="radio" aria-checked="${P.profile===p.id}" data-p="${p.id}"><span class="mark"></span>${avt(p)}${esc(p.name)} ${sbBadge(p)}<span class="lastp">${esc(lastTxt(p))}</span></button>`).join('')}`).join('')||'<div class="note" style="padding:12px">該当なし</div>'}</div>`}
     <div class="note">${P.profile?`選択中: <b>${esc(P.profName)}</b>`:'アカウントを選んでください'}</div>`;
@@ -310,7 +326,7 @@ function stepConfirm(){
 function bindPost(){
   const m=$('#modal');
   $('#pclose').onclick=closePost;
-  const pr=$('#pref');if(pr)pr.onclick=()=>{pr.disabled=true;pr.textContent='更新中…';refreshProfiles(null);};
+  const pr=$('#pref');if(pr)pr.onclick=()=>{pr.disabled=true;pr.textContent='同期中…';refreshProfiles(null);};
   const pc2=$('#pclose2');if(pc2)pc2.onclick=closePost;
   m.querySelectorAll('.steps button').forEach(b=>b.onclick=()=>{P.step=+b.dataset.s;renderPost();});
   const nx=$('#pnext');if(nx)nx.onclick=()=>{P.step++;renderPost();};
@@ -426,7 +442,7 @@ function drawBulk(){
       <div class="row" style="justify-content:center;margin-top:16px"><button class="btn primary" id="bshow">予約一覧で確認・取り消し</button><button class="btn" id="bclose2">閉じる</button></div></div>`;
   }
   const oldAcc=pn.querySelector('.accs'),keepTop=oldAcc?oldAcc.scrollTop:0,oldContent=pn.querySelector('.content'),keepC=oldContent?oldContent.scrollTop:0;
-  pn.innerHTML=`<div class="sheet"><header><h2>一括予約</h2><button class="iconbtn" id="bclose" aria-label="閉じる">✕</button></header><div class="content">${body}</div></div>`;
+  pn.innerHTML=`<div class="sheet"><header><h2>一括予約投稿</h2><button class="iconbtn" id="bclose" aria-label="閉じる">✕</button></header><div class="content">${body}</div></div>`;
   const na=pn.querySelector('.accs');if(na)na.scrollTop=keepTop;const nc=pn.querySelector('.content');if(nc)nc.scrollTop=keepC;
   $('#bclose').onclick=closeBulk;
   const c2=$('#bclose2');if(c2)c2.onclick=closeBulk;
@@ -466,7 +482,7 @@ function drawBulk(){
         if(BK===B)drawBulk();
       }
       toast('imp を更新しました ✓');
-    }catch(e){toast('imp取得に失敗: '+e.message,true);}
+    }catch(e){toast('imp数の取得に失敗: '+e.message,true);}
     B.impBusy=null;if(BK===B)drawBulk();
   };
   const br=$('#brun');if(br)br.onclick=runBulk;
@@ -491,7 +507,7 @@ function drawImp(){
       :`<span class="lastp"><b>${fmtN(i.views)}</b> imp ・♥${fmtN(i.likes)} ・🔁${fmtN(i.retweets)} ・🔖${fmtN(i.bookmarks)}</span>`;
     const link=i&&i.screen_name?` <a href="https://x.com/${esc(i.screen_name)}/status/${esc(i.tweet_id)}" target="_blank" rel="noopener">開く</a>`:'';
     return `<div class="acc" style="cursor:default"><span class="mark" style="visibility:hidden"></span>${avt(p)}${esc(p.name)}${link} ${val}${i&&i.fetched_at?`<span class="lastp" style="margin-left:6px">${esc(fmtAt(i.posted_at).slice(5))}投稿 / ${esc(i.fetched_at.slice(5,16).replace('T',' '))}取得</span>`:''}</div>`;};
-  pn.innerHTML=`<div class="sheet"><header><h2>最新投稿のimp</h2><button class="iconbtn" id="impclose" aria-label="閉じる">✕</button></header><div class="content">
+  pn.innerHTML=`<div class="sheet"><header><h2>直前投稿のimp数取得</h2><button class="iconbtn" id="impclose" aria-label="閉じる">✕</button></header><div class="content">
     <div class="note" style="margin-top:0">各アカウントの「このボードから投稿した最新の1件」の表示回数などを取得します(投稿履歴のあるアカウント: ${n}件)。</div>
     <div class="field"><input id="impq" type="text" placeholder="名前・グループで絞り込み" value="${esc(B.q)}"></div>
     <div class="accs" style="max-height:380px;overflow:auto">${!PROFILES?'<div class="note">読み込み中…</div>':groups.map(g=>`<div class="grp">${esc(g)}</div>${list.filter(p=>p.group===g).map(row).join('')}`).join('')}</div>
@@ -596,7 +612,7 @@ const SLBL={pending:['wait','🕒 待機中(時刻になると投稿)'],running:
 async function refreshSchedCount(){
   try{SCHED=await api('/api/schedule');}catch(e){return;}
   const n=SCHED.filter(x=>x.status==='pending'||x.status==='running').length;
-  $('#schedbtn').textContent='🕒 予約'+(n?` (${n})`:'');
+  $('#schedbtn').innerHTML='🕒 予約履歴'+(n?` <span class="badge">${n}</span>`:'');
   if(!$('#schedpanel').hidden)drawSched();
 }
 function remain(at){const m=Math.round((new Date(at)-Date.now())/6e4);
@@ -611,7 +627,7 @@ function drawSched(){
       ${x.link?`<a href="${esc(x.link)}" target="_blank" rel="noopener">X で開く</a>`:''}</div>
       <div class="row" style="flex-direction:column;gap:6px">${x.status==='failed'||x.status==='missed'?`<button class="btn primary" data-retry="${esc(x.id)}">再試行</button>`:''}<button class="btn sdel" data-s="${esc(x.id)}" ${x.status==='running'?'disabled':''}>${x.status==='pending'?'取り消す':'削除'}</button></div></div>`;}).join('');
   const nfail=SCHED.filter(x=>x.status==='failed'||x.status==='missed').length;
-  pn.innerHTML=`<div class="sheet"><header><h2>予約投稿</h2><button class="iconbtn" id="sclose" aria-label="閉じる">✕</button></header>
+  pn.innerHTML=`<div class="sheet"><header><h2>予約履歴</h2><button class="iconbtn" id="sclose" aria-label="閉じる">✕</button></header>
     <div class="content">${nfail?`<div style="margin-bottom:10px"><button class="btn primary" id="retryall">失敗・見送り ${nfail}件をすべて再試行</button></div>`:''}${rows||'<div class="note">予約はありません。投稿画面の最後のステップで「日時を指定して予約」を選ぶと追加できます。</div>'}
     <div class="note">予約時刻にこのMacで Bot が起動している必要があります。時刻を${30}分以上過ぎて起動した場合は、投稿せず「見送り」になります。</div></div></div>`;
   $('#sclose').onclick=closeSched;

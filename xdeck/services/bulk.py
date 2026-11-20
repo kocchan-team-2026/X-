@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta
 
 from ..api_client import get_profiles
-from ..config import POSTS_DIR, group_ok
+from ..config import ENT, POSTS_DIR, group_ok
 from ..media import edit_video
 from ..rewrite import rewrite_text
 from .scheduler import add_sched, posted_pairs
@@ -63,7 +63,10 @@ EDIT_LOCK = asyncio.Lock()
 
 
 def work_weight(w: dict) -> float:
-    """作品の選ばれやすさ(0=自動選択から外す / 1=標準 / 2=2倍選ばれやすい …)"""
+    """作品の選ばれやすさ(0=自動選択から外す / 1=標準 / 2=2倍選ばれやすい …)。
+    アダルト用は、アフィリエイトリンク未登録の作品は設定にかかわらず 0(自動選択しない)"""
+    if not ENT and not (w.get("affiliate") or "").strip():
+        return 0.0
     try:
         return max(0.0, min(10.0, float(w.get("weight", 1))))
     except (TypeError, ValueError):

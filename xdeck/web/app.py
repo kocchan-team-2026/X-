@@ -38,8 +38,15 @@ async def favicon(_):
     return web.Response(text=favicon_svg(), content_type="image/svg+xml")
 
 
+async def _no_stale_static(req: web.Request, resp: web.StreamResponse) -> None:
+    """画面ファイル(css/js)を更新したあと、ブラウザに古い版を使わせない(毎回、更新の有無を確認させる)"""
+    if req.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+
+
 async def start_web() -> None:
     app = web.Application()
+    app.on_response_prepare.append(_no_stale_static)
     app.add_routes([web.get("/", index), web.get("/favicon.svg", favicon), web.get("/favicon.ico", favicon)])
     app.add_routes(routes_works.routes)
     app.add_routes(routes_schedule.routes)
