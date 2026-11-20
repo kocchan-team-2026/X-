@@ -1,4 +1,6 @@
 """Xdeck ローカル API のクライアント。"""
+import asyncio
+
 import requests
 
 from .config import IMP_TARGET, XDECK_TOKEN, XDECK_URL
@@ -26,3 +28,17 @@ def register_imp_alert(url: str) -> bool:
     except Exception as e:  # noqa: BLE001
         print("imp alert error:", e)
         return False
+
+
+class JobTimeout(RuntimeError):
+    """Xdeck のジョブが待ち時間内に終わらなかった(投稿できたかは不明)"""
+
+
+async def wait_job(jid, tries: int = 60) -> dict:
+    """Xdeck の投稿ジョブが終わるまで2秒おきに確認し、最終状態を返す。終わらなければ JobTimeout"""
+    for _ in range(tries):
+        job = ((await asyncio.to_thread(api, "GET", "x/bulk/status", params={"job_id": jid, "id": jid})).get("data")) or {}
+        if str(job.get("state")).lower() in ("done", "failed", "error", "finished", "completed"):
+            return job
+        await asyncio.sleep(2)
+    raise JobTimeout(f"Xdeck の処理が{tries * 2}秒以内に終わりませんでした。投稿されたかどうかは X で確認してください")

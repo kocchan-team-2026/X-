@@ -5,10 +5,10 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ..api_client import api
+from ..api_client import JobTimeout, api, wait_job
 from ..config import (ENT, FOLLOWUP_MAX_TRIES, FOLLOWUP_TEXT, FOLLOWUP_TEXT_ENT, FOLLOWUP_WINDOW_H,
                       ADULT_STATE_DIR, RECOMMEND_N, STATE_DIR)
-from ..storage import append_posts_log, read_posts_log
+from ..storage import append_posts_log, read_posts_log, write_json_atomic
 from .works import work_affiliate
 
 
@@ -21,7 +21,7 @@ def fu_load() -> dict:
 
 
 def fu_save(d: dict) -> None:
-    FOLLOWUP_FILE().write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(FOLLOWUP_FILE(), d)
 
 
 def posted_tweets(d: Path | None = None) -> dict[str, dict]:
@@ -77,12 +77,7 @@ async def post_followup(profile_id: str, tweet_id: str, text: str) -> str:
     if res.get("code") != 0:
         raise RuntimeError(res.get("msg") or str(res))
     jid = (res.get("data") or {}).get("job_id")
-    job: dict = {}
-    for _ in range(30):
-        job = ((await asyncio.to_thread(api, "GET", "x/bulk/status", params={"job_id": jid, "id": jid})).get("data")) or {}
-        if str(job.get("state")).lower() in ("done", "failed", "error", "finished", "completed"):
-            break
-        await asyncio.sleep(2)
+    job = await wait_job(jid)
     if job.get("failed", 0) > 0 or str(job.get("state")).lower() in ("failed", "error"):
         raise RuntimeError(job.get("error") or "Xdeck 側でリプの投稿に失敗しました")
     return str(job.get("tweet_id") or "")
@@ -157,6 +152,9 @@ async def run_followups() -> None:
                 s.pop("note", None)
                 s.pop("error", None)
                 print(f"followup: {tid} にリプしました")
+        except JobTimeout as e:  # 投稿できたか不明なので、二重リプを避けて再試行しない
+            s.update(state="gave_up", error=str(e)[:200])
+            print(f"followup: {tid} {e}")
         except Exception as e:  # noqa: BLE001
             s["tries"] = s.get("tries", 0) + 1
             s["error"] = str(e)[:200]

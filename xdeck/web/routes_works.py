@@ -14,7 +14,7 @@ from ..config import ENT, POSTS_DIR, STATE_DIR, WORKS_DIR
 from ..media import copy_file_to_clipboard, edit_video, make_thumb
 from ..rewrite import rewrite_text
 from ..services.works import list_items
-from ..storage import read_posts_log
+from ..storage import read_posts_log, write_json_atomic
 from .common import safe_path
 
 routes = web.RouteTableDef()
@@ -162,6 +162,19 @@ async def api_delete_work(req):
     return web.json_response({"ok": True, "moved": len(mine)})
 
 
+def update_work(wid: str, **fields) -> None:
+    """作品の設定(state/_works/<作品ID>.json)の項目を更新する。作品がなければ404"""
+    exists = any(
+        json.loads(m.read_text(encoding="utf-8")).get("work_id") == wid for m in POSTS_DIR.glob("*/meta.json"))
+    f = WORKS_DIR / f"{wid}.json"
+    if not exists and not f.exists():
+        raise web.HTTPNotFound()
+    WORKS_DIR.mkdir(parents=True, exist_ok=True)
+    data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"urls": []}
+    data.update(fields)
+    write_json_atomic(f, data)
+
+
 @routes.post("/api/affiliate")
 async def api_affiliate(req):
     """作品のアフィリエイトリンク(MyFansで手動作成したURL)を保存。空文字で消去"""
@@ -174,16 +187,7 @@ async def api_affiliate(req):
         raise web.HTTPBadRequest(text="invalid work_id")
     if url and (not re.match(r"^https?://\S+$", url) or len(url) > 2000):
         raise web.HTTPBadRequest(text="http(s)://から始まるURLを入れてください")
-    exists = any(
-        json.loads(m.read_text(encoding="utf-8")).get("work_id") == wid for m in POSTS_DIR.glob("*/meta.json"))
-    f = WORKS_DIR / f"{wid}.json"
-    if not exists and not f.exists():
-        raise web.HTTPNotFound()
-    WORKS_DIR.mkdir(parents=True, exist_ok=True)
-    data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"urls": []}
-    data["affiliate"] = url
-    data["affiliate_at"] = datetime.now().isoformat(timespec="seconds") if url else ""
-    f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    update_work(wid, affiliate=url, affiliate_at=datetime.now().isoformat(timespec="seconds") if url else "")
     return web.json_response({"affiliate": url})
 
 
@@ -200,13 +204,5 @@ async def api_weight(req):
         raise web.HTTPBadRequest(text="数値を入れてください")
     if not wid or "/" in wid or wid.startswith(".") or not 0 <= wt <= 10:
         raise web.HTTPBadRequest(text="0〜10の数値を入れてください")
-    exists = any(
-        json.loads(m.read_text(encoding="utf-8")).get("work_id") == wid for m in POSTS_DIR.glob("*/meta.json"))
-    f = WORKS_DIR / f"{wid}.json"
-    if not exists and not f.exists():
-        raise web.HTTPNotFound()
-    WORKS_DIR.mkdir(parents=True, exist_ok=True)
-    data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"urls": []}
-    data["weight"] = wt
-    f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    update_work(wid, weight=wt)
     return web.json_response({"weight": wt})

@@ -5,6 +5,13 @@ from pathlib import Path
 from .config import STATE_DIR
 
 
+def write_json_atomic(path: Path, data, indent: int | None = 2) -> None:
+    """途中で止まっても壊れないよう、一時ファイルに書いてから置き換える"""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=indent), encoding="utf-8")
+    tmp.replace(path)
+
+
 def sched_file() -> Path:
     return STATE_DIR / "_schedule.json"
 
@@ -15,9 +22,7 @@ def load_sched() -> list[dict]:
 
 
 def save_sched(items: list[dict]) -> None:
-    tmp = sched_file().with_suffix(".tmp")
-    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(sched_file())
+    write_json_atomic(sched_file(), items, indent=1)
 
 
 def append_posts_log(entry: dict) -> None:

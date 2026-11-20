@@ -44,8 +44,8 @@ def make_thumb(src: Path, dest: Path) -> None:
 
 def copy_file_to_clipboard(path: Path) -> None:
     """Finder でコピーしたのと同じ状態にする。"""
-    script = f'set the clipboard to (POSIX file "{path.resolve()}")'
-    subprocess.run(["osascript", "-e", script], check=True)
+    subprocess.run(["osascript", "-e", "on run argv", "-e", "set the clipboard to (POSIX file (item 1 of argv))",
+                    "-e", "end run", str(path.resolve())], check=True)
 
 
 def download(url: str, dest: Path) -> None:

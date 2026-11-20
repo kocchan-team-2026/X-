@@ -44,6 +44,18 @@ async def api_discord(_):
     return web.json_response({"url": discord_link.get_url()})
 
 
+@web.middleware
+async def _local_only(req: web.Request, handler):
+    """ほかのサイトのページからボードを操作されないようにする(Host/Origin が自分のボードのときだけ通す)"""
+    hosts = {f"localhost:{PORT}", f"127.0.0.1:{PORT}"}
+    if req.host not in hosts:  # DNSリバインディング対策
+        raise web.HTTPForbidden(text="forbidden host")
+    origin = req.headers.get("Origin")
+    if req.method not in ("GET", "HEAD") and origin and origin.removeprefix("http://") not in hosts:
+        raise web.HTTPForbidden(text="forbidden origin")
+    return await handler(req)
+
+
 async def _no_stale_static(req: web.Request, resp: web.StreamResponse) -> None:
     """画面ファイル(css/js)を更新したあと、ブラウザに古い版を使わせない(毎回、更新の有無を確認させる)"""
     if req.path.startswith("/static/"):
@@ -51,7 +63,7 @@ async def _no_stale_static(req: web.Request, resp: web.StreamResponse) -> None:
 
 
 async def start_web() -> None:
-    app = web.Application()
+    app = web.Application(middlewares=[_local_only])
     app.on_response_prepare.append(_no_stale_static)
     app.add_routes([web.get("/", index), web.get("/favicon.svg", favicon), web.get("/favicon.ico", favicon),
                     web.get("/api/discord", api_discord)])

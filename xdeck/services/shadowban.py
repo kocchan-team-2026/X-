@@ -5,6 +5,7 @@ from datetime import datetime
 
 from ..api_client import api
 from ..config import STATE_DIR
+from ..storage import write_json_atomic
 
 
 SB_FILE = lambda: STATE_DIR / "_shadowban.json"  # noqa: E731
@@ -76,7 +77,7 @@ async def run_shadowban(job: str, profile_ids: list[str]) -> None:
             async with SB_LOCK:
                 d = sb_load()
                 d[pid] = summ
-                SB_FILE().write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+                write_json_atomic(SB_FILE(), d, indent=1)
             st["done"] += 1
         st["state"] = "finished"
     except Exception as e:  # noqa: BLE001

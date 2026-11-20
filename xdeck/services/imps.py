@@ -6,7 +6,7 @@ from datetime import datetime
 
 from ..api_client import api
 from ..config import STATE_DIR
-from ..storage import load_sched, read_posts_log
+from ..storage import load_sched, read_posts_log, write_json_atomic
 
 
 IMP_FILE = lambda: STATE_DIR / "_imps.json"  # noqa: E731
@@ -61,7 +61,7 @@ async def run_imps(job: str, targets: dict[str, dict]) -> None:
         async with IMP_LOCK:
             d0 = imp_load()
             d0[pid] = rec
-            IMP_FILE().write_text(json.dumps(d0, ensure_ascii=False, indent=1), encoding="utf-8")
+            write_json_atomic(IMP_FILE(), d0, indent=1)
         st["done"] += 1
 
     try:

@@ -133,7 +133,7 @@ async function drawDrawer(w){
   $('#dpost').onclick=()=>openPost(w);
   $('#delwork').onclick=async()=>{
     const n=w.posts.length;
-    if(!confirm(`この作品(保存した投稿${n}件)を削除しますか?\n\n・ボードから消えます\n・ファイルは saved/_trash/ に移動されます(完全には削除されません)\n・予約投稿が入っている場合は、予約一覧から別に取り消してください`))return;
+    if(!confirm(`この作品(保存した投稿${n}件)を削除しますか?\n\n・ボードから消えます\n・ファイルは data/保存先/state/_trash/ に移動されます(完全には削除されません)\n・予約投稿が入っている場合は、予約一覧から別に取り消してください`))return;
     try{await api('/api/delete_work',{method:'POST',body:JSON.stringify({work_id:w.work_id})});closeDrawer();await load();toast('作品を削除しました(_trash に移動)');}
     catch(e){toast('削除に失敗: '+e.message,true);}
   };
@@ -438,7 +438,7 @@ function drawBulk(){
         <div class="row"><span class="note" style="margin:0">細かく指定</span>${tsel('bst',B.st)} 〜 ${dsel('bed',B.ed)}${tsel('bet',B.et)}</div>
         <div class="note" style="margin-top:6px">${esc(bSummary(B))}</div></div>
       <div class="field"><div class="l">1アカウントあたりの投稿数</div><input type="number" id="bper" min="1" max="20" value="${B.per}" style="width:90px"></div>
-      <div class="note">作品はボードの中からランダムに選びます(同じアカウントで投稿・予約済みの作品は除外)。本文のリライトと動画加工も自動で行います。合計 <b>${total}</b> 件を、指定の時間帯の中でランダムな時刻に予約します。</div>
+      <div class="note">作品はボードの中からランダムに選びます(同じアカウントで投稿・予約済みの動画は除外(同じ作品でも別の動画ならOK))。本文のリライトと動画加工も自動で行います。合計 <b>${total}</b> 件を、指定の時間帯の中でランダムな時刻に予約します。</div>
       <div style="margin-top:14px"><button class="btn go block" id="brun" ${n&&new Date(bEnd(B))>new Date(bStart(B))?'':'disabled'}>${total}件を一括予約する</button></div>`;
   }else if(B.state==='busy'){
     const st=B.st||{total:0,done:0};
@@ -446,7 +446,8 @@ function drawBulk(){
       <div class="note">${st.done} / ${st.total||'?'} 件(リライトと動画加工に時間がかかります。この画面を閉じても処理は続きます)</div></div>`;
   }else{
     const st=B.st;
-    body=`<div class="result"><div style="font-size:42px">${st.errors.length&&!st.done?'⚠️':'✅'}</div><h3>${st.total-st.errors.length}件を予約しました</h3>
+    const okN=st.total-st.errors.length;
+    body=`<div class="result"><div style="font-size:42px">${okN>0?'✅':'⚠️'}</div><h3>${okN>0?`${okN}件を予約しました`:'予約できませんでした'}</h3>
       ${[...st.notes,...st.errors].map(x=>`<div class="note" style="color:var(--warn)">${esc(x)}</div>`).join('')}
       <div class="row" style="justify-content:center;margin-top:16px"><button class="btn primary" id="bshow">予約一覧で確認・取り消し</button><button class="btn" id="bclose2">閉じる</button></div></div>`;
   }

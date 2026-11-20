@@ -8,6 +8,7 @@ import requests
 
 from ..config import ANY_URL_RE, POSTS_DIR, WORK_SITES, WORKS_DIR
 from ..media import download
+from ..storage import write_json_atomic
 
 
 def find_work_urls(text: str) -> list[dict]:
@@ -32,7 +33,7 @@ def add_work_urls(work_id: str, urls: list[dict]) -> list[dict]:
     for x in new:
         x["added_at"] = datetime.now().isoformat(timespec="seconds")
     data["urls"] += new
-    f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(f, data)
     return new
 
 
