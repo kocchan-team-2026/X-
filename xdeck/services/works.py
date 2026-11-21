@@ -1,5 +1,6 @@
 """作品(Discordスレッド単位)と、保存した投稿の管理。"""
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -48,14 +49,7 @@ def already_saved(work_id: str, tweet_id: str) -> bool:
     return False
 
 
-def save_tweet(user: str, tweet_id: str, work_id: str, src: dict | None = None) -> tuple[Path, list[Path], dict]:
-    res = requests.get(f"https://api.fxtwitter.com/{user}/status/{tweet_id}", timeout=30)
-    res.raise_for_status()
-    tw = res.json()["tweet"]
-
-    folder = POSTS_DIR / f"{datetime.now():%Y%m%d_%H%M%S}_{tw['author']['screen_name']}_{tweet_id}"
-    folder.mkdir(parents=True, exist_ok=True)
-
+def _write_tweet(folder: Path, tw: dict, tweet_id: str, work_id: str, src: dict | None) -> list[Path]:
     (folder / "meta.json").write_text(json.dumps({
         "work_id": work_id, "tweet_id": tweet_id,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
@@ -77,6 +71,21 @@ def save_tweet(user: str, tweet_id: str, work_id: str, src: dict | None = None) 
         dest = folder / f"video_{i}.mp4"
         download(v["url"], dest)
         videos.append(dest)
+    return videos
+
+
+def save_tweet(user: str, tweet_id: str, work_id: str, src: dict | None = None) -> tuple[Path, list[Path], dict]:
+    res = requests.get(f"https://api.fxtwitter.com/{user}/status/{tweet_id}", timeout=30)
+    res.raise_for_status()
+    tw = res.json()["tweet"]
+
+    folder = POSTS_DIR / f"{datetime.now():%Y%m%d_%H%M%S}_{tw['author']['screen_name']}_{tweet_id}"
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        videos = _write_tweet(folder, tw, tweet_id, work_id, src)
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)  # 途中までのフォルダを残さない(「保存済み」と誤判定されて拾い直せなくなるため)
+        raise
     return folder, videos, tw
 
 
