@@ -33,7 +33,8 @@ def pick_media(work: dict, used: set[str] | frozenset = frozenset()):
     return None, []
 
 
-async def prep_one(work: dict, profile: dict, at: datetime, batch: str, used: set[str] = frozenset()) -> dict:
+async def prep_one(work: dict, profile: dict, at: datetime, batch: str, used: set[str] = frozenset(),
+                   tag: dict | None = None) -> dict:
     """1件分: 本文リライト + 動画加工 + 予約登録"""
     post, media = pick_media(work, used)
     if not media:
@@ -62,10 +63,10 @@ async def prep_one(work: dict, profile: dict, at: datetime, batch: str, used: se
                 await asyncio.to_thread(edit_video, src, dest, 0.02, round(u(0.02, 0.08), 3), round(u(1.05, 1.15), 3),
                                         1.15, round(u(lo, hi), 2), round(u(lo, hi), 2))
                 kept = await add_sched(work["work_id"], profile["id"], profile["name"], text, [str(dest)], at,
-                                       {"bulk": batch})
+                                       {"bulk": batch, **(tag or {})})
             return kept
         paths.append(str(src))
-    return await add_sched(work["work_id"], profile["id"], profile["name"], text, paths, at, {"bulk": batch})
+    return await add_sched(work["work_id"], profile["id"], profile["name"], text, paths, at, {"bulk": batch, **(tag or {})})
 
 
 EDIT_LOCKS: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -82,7 +83,8 @@ def work_weight(w: dict) -> float:
         return 1.0
 
 
-async def run_bulk(job: str, profile_ids: list[str], start: datetime, end: datetime, per: int) -> None:
+async def run_bulk(job: str, profile_ids: list[str], start: datetime, end: datetime, per: int,
+                   tag: dict | None = None) -> None:
     st = BULK[job]
     try:
         profs = {p["id"]: p for p in await asyncio.to_thread(get_profiles)}
@@ -116,7 +118,7 @@ async def run_bulk(job: str, profile_ids: list[str], start: datetime, end: datet
         async def one(w, pr, t):
             async with sem:
                 try:
-                    await prep_one(w, pr, t, job, used.get((w["work_id"], pr["id"]), set()))
+                    await prep_one(w, pr, t, job, used.get((w["work_id"], pr["id"]), set()), tag)
                 except Exception as e:  # noqa: BLE001
                     st["errors"].append(f"{pr['name']}: {str(e)[:120]}")
                 st["done"] += 1

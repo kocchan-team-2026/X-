@@ -4,8 +4,8 @@ from pathlib import Path
 from aiohttp import web
 
 from ..config import ENT, GALLERY_URL, PORT, PORT_ENT, PORT_ADULT
-from ..services import discord_link
-from . import routes_accounts, routes_schedule, routes_works
+from ..services import discord_link, status
+from . import routes_accounts, routes_routine, routes_schedule, routes_works
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -44,6 +44,11 @@ async def api_discord(_):
     return web.json_response({"url": discord_link.get_url()})
 
 
+async def api_status(_):
+    """右上の接続表示用: Discord Bot と Xdeck の接続状態"""
+    return web.json_response({"discord": status.discord_state(), "xdeck": await status.xdeck_state()})
+
+
 @web.middleware
 async def _local_only(req: web.Request, handler):
     """ほかのサイトのページからボードを操作されないようにする(Host/Origin が自分のボードのときだけ通す)"""
@@ -66,9 +71,10 @@ async def start_web() -> None:
     app = web.Application(middlewares=[_local_only])
     app.on_response_prepare.append(_no_stale_static)
     app.add_routes([web.get("/", index), web.get("/favicon.svg", favicon), web.get("/favicon.ico", favicon),
-                    web.get("/api/discord", api_discord)])
+                    web.get("/api/discord", api_discord), web.get("/api/status", api_status)])
     app.add_routes(routes_works.routes)
     app.add_routes(routes_schedule.routes)
+    app.add_routes(routes_routine.routes)
     app.add_routes(routes_accounts.routes)
     app.router.add_static("/static", STATIC_DIR)
     runner = web.AppRunner(app)

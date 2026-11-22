@@ -614,6 +614,65 @@ async function runBulk(){
     refreshSchedCount();drawBulk();
   }catch(e){if(BK===B){B.state='form';drawBulk();}toast('失敗: '+e.message,true);}
 }
+
+/* ===== 定常予約(毎日決まった時間帯の自動予約) ===== */
+let ROUT=null;
+const RT_STATE={plan:['wait','予定'],running:['busy','作成中'],done:['ok','予約済み'],error:['err','失敗'],skip:['','この日は休み'],off:['','OFF'],late:['','時間切れ(未実行)']};
+const RT_LABEL={am:'朝',pm:'午後',night:'夜'};
+const rtEnd=[...TIMES.slice(1),'24:00'];
+function rsel(id,val,end){const ts=(end?rtEnd:TIMES).includes(val)?(end?rtEnd:TIMES):[...(end?rtEnd:TIMES),val].sort();return `<select id="${id}" class="tsel">${ts.map(t=>`<option ${t===val?'selected':''}>${t}</option>`).join('')}</select>`;}
+async function openRout(){ROUT={data:null,edit:null,busy:false};$('#routpanel').hidden=false;drawRout();await loadRout();}
+function closeRout(){ROUT=null;$('#routpanel').hidden=true;$('#routpanel').innerHTML='';}
+async function loadRout(){const R=ROUT;try{const d=await api('/api/routine');if(ROUT===R){R.data=d;drawRout();}}catch(e){toast('定常予約の取得に失敗: '+e.message,true);}}
+async function routCall(method,path,body,msg){
+  const R=ROUT;if(!R||R.busy)return;R.busy=true;
+  try{const r=await api(path,{method,body:JSON.stringify(body)});if(msg)toast(msg(r));refreshSchedCount();}
+  catch(e){toast('失敗: '+e.message,true);}
+  R.busy=false;R.edit=null;if(ROUT===R)await loadRout();
+}
+function drawRout(){
+  const pn=$('#routpanel'),R=ROUT;if(!R)return;const D=R.data;
+  let body='<div class="note">読み込み中…</div>';
+  if(D){
+    const lbl=s=>s.label||RT_LABEL[s.id]||s.id;
+    const sl=Object.fromEntries(D.slots.map(s=>[s.id,s]));
+    const base=D.slots.map(s=>`<div class="row" style="margin-bottom:8px;gap:8px;flex-wrap:wrap"><label class="row" style="gap:6px;min-width:84px"><input type="checkbox" data-en="${s.id}" ${s.enabled?'checked':''}><b>${esc(lbl(s))}</b></label>
+      ${rsel('rs-'+s.id,s.start)} 〜 ${rsel('re-'+s.id,s.end,true)}
+      <span class="note" style="margin:0">${s.mode==='imp_below'?`この日の前の投稿が <input type="number" min="0" id="ri-${s.id}" value="${s.imp_max??1000}" style="width:80px"> imp以下のアカウントだけ(開始時刻にimpを取得)`:'全アカウント'}</span></div>`).join('');
+    const days=D.days.map((d,i)=>`<div class="field" style="margin-bottom:10px"><div class="l">${d.date.slice(5).replace('-','/')}(${d.wd})${i===0?' 今日':i===1?' 明日':''}</div>${d.slots.map(x=>{
+      const key=d.date+':'+x.id,st=RT_STATE[x.state]||['',x.state],run=x.run||{},ed=R.edit===key;
+      const detail=x.state==='done'||x.state==='error'?`<div class="note" style="margin:2px 0 0">${run.reserved??0}件を予約${run.candidates!=null?`(対象${run.candidates}アカウント)`:''}${(run.errors||[]).length?` / エラー${run.errors.length}件`:''}</div>${[...(run.notes||[]),...(run.errors||[]).slice(0,5)].map(n=>`<div class="note" style="margin:2px 0 0;color:var(--warn)">${esc(n)}</div>`).join('')}`:'';
+      return `<div class="srow" style="align-items:flex-start"><div class="when" style="min-width:150px"><b>${esc(lbl(sl[x.id]))}</b> ${x.start}〜${x.end}${x.changed&&!x.skip?' <span class="note" style="margin:0">(この日だけ変更)</span>':''}</div>
+        <div class="main">${badge(st[0],esc(st[1]))}${detail}
+        ${ed?`<div class="row" style="margin-top:8px;gap:6px">${rsel('ds',x.start)} 〜 ${rsel('de',x.end,true)}<button class="btn primary sm" data-dsave="${key}">この日だけ変更</button><button class="btn sm" data-dcancel>やめる</button></div>`:''}</div>
+        <div class="row" style="flex-direction:column;gap:6px">${!ed&&x.state!=='running'&&x.state!=='off'?`<button class="btn sm" data-dedit="${key}">時間を変える</button>`:''}${!ed&&x.state==='skip'?`<button class="btn sm" data-dclear="${key}">休みをやめる</button>`:''}${!ed&&['plan','done','error'].includes(x.state)?`<button class="btn sm" data-dskip="${key}">この日は休む</button>`:''}${!ed&&x.changed&&!x.skip?`<button class="btn sm" data-dclear="${key}">基本に戻す</button>`:''}${['done','error'].includes(x.state)?`<button class="btn sm danger" data-drebuild="${key}">作り直す</button>`:''}</div></div>`;}).join('')}</div>`).join('');
+    body=`<div class="row" style="justify-content:space-between;margin-bottom:12px"><label class="row" style="gap:8px;font-size:15px"><input type="checkbox" id="rtmaster" ${D.enabled?'checked':''}><b>定常予約を有効にする</b></label>
+        <span class="note" style="margin:0">${D.enabled?'ON: 各時間帯の'+D.lead_min+'分前に自動で予約を作ります':'OFF: 何も自動予約しません'}</span></div>
+      <div class="field"><div class="l">基本の時間帯(毎日)</div>${base}
+        <button class="btn primary" id="rtsave">基本の時間帯を保存</button>
+        <div class="note">各アカウント1日1回、時間帯の中のランダムな時刻に予約します(作品選び・リライト・動画加工は一括予約と同じ)。${IS_ENT?'':'午後は、開始時刻にその日の朝の投稿のimpを取得して、しきい値以下のアカウントだけ予約します(その日まだ投稿していないアカウントは対象)。'}保存すると、まだ予約を作っていない日に反映されます。</div></div>
+      <div class="field"><div class="l">今後7日間(日ごとの変更)</div>${days}
+        <div class="note">予約済みの時間帯を変更・休みにすると、待機中の予約を取り消して作り直します(投稿済みのものは残ります)。個別の取り消しは「予約履歴」から。</div></div>`;
+  }
+  const keep=pn.querySelector('.content'),top=keep?keep.scrollTop:0;
+  pn.innerHTML=`<div class="sheet"><header><h2>定常予約</h2><button class="iconbtn" id="rtclose" aria-label="閉じる">✕</button></header><div class="content">${body}</div></div>`;
+  const nc=pn.querySelector('.content');if(nc)nc.scrollTop=top;
+  $('#rtclose').onclick=closeRout;if(!D)return;
+  $('#rtmaster').onchange=e=>routCall('PUT','/api/routine/config',{enabled:e.target.checked},()=>e.target.checked?'定常予約をONにしました':'定常予約をOFFにしました');
+  $('#rtsave').onclick=()=>routCall('PUT','/api/routine/config',{slots:D.slots.map(s=>({id:s.id,start:$('#rs-'+s.id).value,end:$('#re-'+s.id).value,enabled:pn.querySelector(`[data-en="${s.id}"]`).checked,...(s.mode==='imp_below'?{imp_max:+$('#ri-'+s.id).value}:{})}))},()=>'保存しました ✓');
+  const split=k=>({date:k.slice(0,10),slot:k.slice(11)});
+  pn.querySelectorAll('[data-dedit]').forEach(b=>b.onclick=()=>{R.edit=b.dataset.dedit;drawRout();});
+  pn.querySelectorAll('[data-dcancel]').forEach(b=>b.onclick=()=>{R.edit=null;drawRout();});
+  pn.querySelectorAll('[data-dsave]').forEach(b=>b.onclick=()=>routCall('PUT','/api/routine/day',{...split(b.dataset.dsave),start:$('#ds').value,end:$('#de').value},r=>r.cancelled?`変更しました(待機中の${r.cancelled}件を取り消して作り直します)`:'この日だけ変更しました ✓'));
+  pn.querySelectorAll('[data-dskip]').forEach(b=>b.onclick=()=>{if(!confirm('この日のこの時間帯は休みにします。予約済みの待機中の予約は取り消されます。よろしいですか?'))return;
+    routCall('PUT','/api/routine/day',{...split(b.dataset.dskip),skip:true},r=>r.cancelled?`休みにしました(${r.cancelled}件を取り消し)`:'この日は休みにしました ✓');});
+  pn.querySelectorAll('[data-dclear]').forEach(b=>b.onclick=()=>routCall('PUT','/api/routine/day',{...split(b.dataset.dclear),clear:true},r=>r.cancelled?`基本に戻しました(待機中の${r.cancelled}件を取り消して作り直します)`:'基本の時間帯に戻しました ✓'));
+  pn.querySelectorAll('[data-drebuild]').forEach(b=>b.onclick=()=>{if(!confirm('待機中の予約を取り消して、もう一度作り直します。よろしいですか?'))return;
+    routCall('POST','/api/routine/rebuild',split(b.dataset.drebuild),r=>`${r.cancelled}件を取り消しました。まもなく作り直します`);});
+}
+$('#routbtn').onclick=openRout;
+$('#routpanel').addEventListener('click',e=>{if(e.target.id==='routpanel')closeRout();});
+setInterval(()=>{if(ROUT&&!ROUT.edit&&!ROUT.busy&&!$('#routpanel').hidden)loadRout();},20000);
 $('#bulkbtn').onclick=openBulk;
 $('#bulkpanel').addEventListener('click',e=>{if(e.target.id==='bulkpanel')closeBulk();});
 function myfansPost(w){for(const u of w.urls||[]){const m=/^https:\/\/myfans\.jp\/posts\/([0-9a-f-]{36})/i.exec(u.url);if(m)return `https://myfans.jp/posts/${m[1]}`;}return '';}
@@ -654,10 +713,25 @@ function drawSched(){
 $('#schedbtn').onclick=openSched;
 $('#schedpanel').addEventListener('click',e=>{if(e.target.id==='schedpanel')closeSched();});
 setInterval(refreshSchedCount,30000);refreshSchedCount();
-document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!$('#imppanel').hidden)closeImp();else if(!$('#sbpanel').hidden)closeSb();else if(!$('#bulkpanel').hidden)closeBulk();else if(!$('#schedpanel').hidden)closeSched();else if(!$('#modal').hidden)closePost();else if(openId)closeDrawer();});
+document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!$('#imppanel').hidden)closeImp();else if(!$('#sbpanel').hidden)closeSb();else if(!$('#routpanel').hidden)closeRout();else if(!$('#bulkpanel').hidden)closeBulk();else if(!$('#schedpanel').hidden)closeSched();else if(!$('#modal').hidden)closePost();else if(openId)closeDrawer();});
 // URL から直接開ける: #w=作品ID / #post=作品ID&step=2
 load().then(()=>{
   const h=new URLSearchParams(location.hash.slice(1));
   if(h.get('w'))openDrawer(h.get('w'));
   if(h.get('post')){const w=works.find(x=>x.work_id===h.get('post'));if(w){openDrawer(w.work_id);openPost(w);if(h.get('step'))P.step=+h.get('step'),renderPost();}}
 });
+
+/* ===== 接続状態(右上の緑/赤の点) ===== */
+(function(){
+  const el=$('#conn');let fails=0;
+  const chip=(name,st)=>{const cls=st?(st.ok?'':' bad'):' unk',mark=st&&!st.ok?'! ':'';
+    return `<span class="c${cls}" title="${esc(name+': '+(st?st.msg:'確認できません(ボードに接続できません)'))}"><span class="d"></span><span class="t">${mark}${name}</span></span>`;};
+  async function tick(){
+    let d=null;
+    try{d=await api('/api/status');fails=0;}catch{fails++;}
+    // ボード自体に届かないときは、どちらも不明(灰色)ではなく赤で知らせる
+    if(!d&&fails>=2)d={discord:{ok:false,msg:'ボードに接続できません(アプリが止まっている可能性)'},xdeck:{ok:false,msg:'ボードに接続できません'}};
+    if(d)el.innerHTML=chip('Discord',d.discord)+chip('Xdeck',d.xdeck);
+  }
+  tick();setInterval(tick,10000);
+})();

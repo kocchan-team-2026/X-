@@ -116,7 +116,8 @@ async def liked_enough(st: dict, mine: dict[str, dict]) -> list[dict]:
 
 async def run_followups() -> None:
     """インプ達成(Xdeck のインプ通知が reached)した投稿に、同じアカウントから1つ目のリプ(アダルト用=「続きです〜」/エンタメ用=「おすすめです〜」)を出し、\n    続けてリンクを1件ずつリプでつなげる(アダルト用=アフィリエイトリンク/エンタメ用=アダルト用の最近の投稿URL3件)"""
-    alerts = (await asyncio.to_thread(api, "GET", "imp-alerts/list"))["data"]["alerts"]
+    # status=reached で絞って取る(絞らないと、待機中の通知が200件を超えたとき、達成済みが一覧から漏れる)
+    alerts = (await asyncio.to_thread(api, "GET", "imp-alerts/list", params={"status": "reached"}))["data"]["alerts"]
     reached = [a for a in alerts if a.get("status") == "reached"]
     st = fu_load()
     if "_baseline" not in st:

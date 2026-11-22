@@ -188,3 +188,11 @@ details summary{cursor:pointer;color:var(--muted)}
 .sbb{margin-left:6px}.sbt{font-size:12px;color:var(--muted);margin-left:4px}
 .affrow{display:flex;gap:8px}.affrow input{flex:1;min-width:0;background:var(--surface2);color:var(--text,#e8eaf0);border:1px solid var(--border);border-radius:9px;padding:9px 12px}
 .btn.danger{color:var(--err);border-color:#7a3333}.btn.danger:hover:not(:disabled){background:#3a1f22}
+
+.conn{display:flex;gap:10px;align-items:center;margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap}
+.conn .c{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:999px;border:1px solid var(--border)}
+.conn .d{width:8px;height:8px;border-radius:50%;background:#2fbf71}
+.conn .c.bad{color:#fff;background:#c0392b;border-color:#c0392b;font-weight:700}
+.conn .c.bad .d{background:#fff}
+.conn .c.unk .d{background:#888}
+@media (max-width:640px){.conn .t{display:none}.conn .c.bad .t{display:inline}}

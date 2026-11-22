@@ -6,8 +6,9 @@ import discord
 
 from .config import (CHANNEL_IDS, ENT, ENT_CHANNELS, FOLLOWUP_ON, GALLERY_URL, POSTS_DIR, STATE_DIR,
                      URL_RE)
-from .services import discord_link
+from .services import discord_link, status
 from .services.followups import followup_loop
+from .services.routine import routine_loop
 from .services.scheduler import scheduler_loop
 from .services.works import add_work_urls, already_saved, find_work_urls, save_tweet
 from .web.app import start_web
@@ -20,8 +21,10 @@ class Bot(discord.Client):
     async def setup_hook(self):
         POSTS_DIR.mkdir(parents=True, exist_ok=True)
         STATE_DIR.mkdir(parents=True, exist_ok=True)
+        status.set_client(self)
         await start_web()
         self.sched_task = asyncio.create_task(scheduler_loop())
+        self.routine_task = asyncio.create_task(routine_loop())
         if FOLLOWUP_ON:
             self.followup_task = asyncio.create_task(followup_loop())
 
@@ -30,7 +33,18 @@ client = Bot(intents=intents)
 
 
 @client.event
+async def on_disconnect():
+    status.discord_dropped()
+
+
+@client.event
+async def on_resumed():
+    status.discord_connected()
+
+
+@client.event
 async def on_ready():
+    status.discord_connected()
     print(f"logged in as {client.user} / data dir: {POSTS_DIR.parent}")
     # 設定したチャンネルのうち、Bot から見えるものがあればそのチャンネルを、なければ最初のサーバーを開く
     ch = next((c for c in (client.get_channel(i) for i in sorted(CHANNEL_IDS)) if c), None)

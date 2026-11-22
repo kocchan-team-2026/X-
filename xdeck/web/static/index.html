@@ -17,6 +17,7 @@
     <nav class="boards v" aria-label="ボード切替"><a href="http://localhost:__P_A__/" __A_A__>アダルト</a><a href="http://localhost:__P_E__/" __A_E__>エンタメ</a></nav>
     <div class="grp">投稿</div>
     <button class="nav" id="bulkbtn" title="一括予約投稿"><span class="ic">🎲</span><span class="lb">一括予約投稿</span></button>
+    <button class="nav" id="routbtn" title="定常予約(毎日決まった時間帯の自動予約)"><span class="ic">🔁</span><span class="lb">定常予約</span></button>
     <button class="nav" id="schedbtn" title="予約履歴"><span class="ic">🕒</span><span class="lb">予約履歴</span><span class="badge" hidden></span></button>
     <div class="grp">確認</div>
     <button class="nav" id="impbtn" title="直前投稿のimp数取得"><span class="ic">📈</span><span class="lb">直前投稿のimp数取得</span></button>
@@ -35,6 +36,7 @@
         <input id="q" class="search" type="search" placeholder="本文・投稿者・URL" aria-label="検索">
       </div>
       <span class="count" id="count"></span>
+      <div class="conn" id="conn" aria-live="polite"></div>
     </header>
     <main class="grid" id="grid"></main>
   </div>
@@ -45,6 +47,7 @@
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="投稿を作成" hidden></div>
 <div class="modal" id="schedpanel" role="dialog" aria-modal="true" aria-label="予約履歴" hidden></div>
 <div class="modal" id="bulkpanel" role="dialog" aria-modal="true" aria-label="一括予約投稿" hidden></div>
+<div class="modal" id="routpanel" role="dialog" aria-modal="true" aria-label="定常予約" hidden></div>
 <div class="modal" id="imppanel" role="dialog" aria-modal="true" aria-label="直前投稿のimp数取得" hidden></div>
 <div class="modal" id="sbpanel" role="dialog" aria-modal="true" aria-label="シャドウバン判定" hidden></div>
 <div id="toast" aria-live="polite"></div>
