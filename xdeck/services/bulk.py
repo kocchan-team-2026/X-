@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from ..api_client import get_profiles
 from ..config import ENT, POSTS_DIR, group_ok
 from ..media import edit_video
-from ..rewrite import rewrite_text
+from ..rewrite import RewriteRefused, rewrite_text
 from .scheduler import add_sched, posted_media
 from .works import list_items
 
@@ -48,6 +48,8 @@ async def prep_one(work: dict, profile: dict, at: datetime, batch: str, used: se
         try:
             cands = await asyncio.to_thread(rewrite_text, base)
             text = random.choice(cands) if cands else base
+        except RewriteRefused as e:  # 内容を断られた本文は、元の文のまま投稿しない(この予約は見送る)
+            raise RuntimeError(str(e)) from e
         except Exception:  # noqa: BLE001
             text = base  # リライトに失敗したら元の文のまま
     if not text:

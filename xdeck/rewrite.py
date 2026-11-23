@@ -6,6 +6,10 @@ import subprocess
 from .config import STATE_DIR
 
 
+class RewriteRefused(RuntimeError):
+    """リライトを断られた/文章として使えない返答だった(内容の問題。やり直しても同じになりやすい)"""
+
+
 def rewrite_text(text: str, urls: list[str] | None = None) -> list[str]:
     """Claude Code (claude -p) で本文を強めにリライトし、書き方の違う3案を返す。リンクは本文に含めない。"""
     import random
@@ -42,8 +46,11 @@ def rewrite_text(text: str, urls: list[str] | None = None) -> list[str]:
         cands = json.loads(out[out.index("["): out.rindex("]") + 1])
         cands = [c.strip() for c in cands if isinstance(c, str) and c.strip()]
     except Exception:  # noqa: BLE001
-        cands = [out]  # JSONで返らなかったときは、全体を1案として扱う
+        # JSON で返らないのは、断りや説明文が返ったとき。それを投稿文にしてはいけない
+        raise RewriteRefused("リライトできませんでした: " + out[:60].replace("\n", " "))
+    # 元より極端に長い案は、説明文が混ざったものとして捨てる
+    cands = [c for c in cands if len(c) <= len(body) * 2 + 30]
     if not cands:
-        raise RuntimeError("リライト結果が空でした")
+        raise RewriteRefused("リライト結果が使えませんでした(空、または長すぎます)")
     # 本文にリンクは入れない(元の文にURLがあっても外す)
     return [re.sub(r"\s*https?://\S+", "", c).strip() for c in cands]
