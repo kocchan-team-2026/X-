@@ -10,7 +10,8 @@ from .services import discord_link, status
 from .services.followups import followup_loop
 from .services.routine import routine_loop
 from .services.scheduler import scheduler_loop
-from .services.works import add_work_urls, already_saved, find_work_urls, save_tweet
+from .services import fanza
+from .services.works import add_work_urls, work_affiliate, set_affiliate, already_saved, find_work_urls, save_tweet
 from .web.app import start_web
 
 intents = discord.Intents.default()
@@ -90,6 +91,15 @@ async def process(msg: discord.Message, notify: bool = True) -> bool:
             new = await asyncio.to_thread(add_work_urls, work_id, work_urls)
             if new:
                 notes.append("作品URLを登録: " + ", ".join(x["site"] for x in new))
+            # FANZA のURLが入ったとき、アフィリエイトリンクが未登録なら自動で作る(登録済みは上書きしない)
+            fz = next((x["url"] for x in work_urls if x["site"] == "FANZA"), "")
+            if fz and fanza.enabled() and not await asyncio.to_thread(work_affiliate, work_id):
+                link = await asyncio.to_thread(fanza.make_link, fz)
+                if link:
+                    await asyncio.to_thread(set_affiliate, work_id, link)
+                    notes.append("アフィリエイトリンクを自動作成")
+                else:
+                    notes.append("アフィリエイトリンクを作れませんでした(手動で登録してください)")
         tw = None
         if m:
             if await asyncio.to_thread(already_saved, work_id, m.group(2)):

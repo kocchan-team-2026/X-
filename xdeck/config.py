@@ -60,6 +60,10 @@ GALLERY_URL = f"http://localhost:{PORT}"
 # ---- Discord ----
 DISCORD_URL = os.environ.get("DISCORD_URL", "")  # サイドバーの「Discordを開く」の飛び先。空なら Bot が見ているサーバー/チャンネルから自動で作る
 
+# ---- DMM(FANZA)アフィリエイト: URLからアフィリエイトリンクを自動で作る ----
+DMM_API_ID = os.environ.get("DMM_API_ID", "")
+DMM_AFFILIATE_ID = os.environ.get("DMM_AFFILIATE_ID", "")  # 例: xxxx-990
+
 # ---- Xdeck ----
 XDECK_URL = os.environ.get("XDECK_URL", "http://127.0.0.1:39150/api/v1")
 XDECK_TOKEN = os.environ.get("XDECK_TOKEN", "")

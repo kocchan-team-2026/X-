@@ -154,3 +154,12 @@ def work_affiliate(wid: str) -> str:
         return json.loads(f.read_text(encoding="utf-8")).get("affiliate", "") or ""
     except Exception:  # noqa: BLE001
         return ""
+
+
+def set_affiliate(wid: str, url: str) -> None:
+    """作品のアフィリエイトリンクを保存する(作品の設定ファイルがなければ作る)"""
+    WORKS_DIR.mkdir(parents=True, exist_ok=True)
+    f = WORKS_DIR / f"{wid}.json"
+    data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"urls": []}
+    data.update(affiliate=url, affiliate_at=datetime.now().isoformat(timespec="seconds"))
+    write_json_atomic(f, data)
