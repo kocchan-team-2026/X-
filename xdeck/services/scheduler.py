@@ -5,12 +5,16 @@ import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ..api_client import api, register_imp_alert, wait_job
+from ..api_client import api, job_error, register_imp_alert, stop_browser, wait_job
 from ..config import POSTS_DIR, SCHED_GRACE_MIN, STATE_DIR
 from ..storage import append_posts_log, load_sched, read_posts_log, save_sched
 
 
 SCHED_LOCK = asyncio.Lock()
+AUTO_RETRIES = 2     # 通信の失敗のとき、アカウントのブラウザを再起動して自動でやり直す回数
+AUTO_RETRY_MIN = 2   # やり直しまでの間隔(分)
+# まだ投稿されていない段階の失敗(やり直しても二重投稿にならない)
+RETRYABLE = ("メディアのアップロードに失敗", "ページ内でエラー")
 
 
 def media_key(path: str) -> str:
@@ -118,7 +122,7 @@ async def run_due_posts() -> None:
             jid = (res.get("data") or {}).get("job_id")
             job = await wait_job(jid)
             if job.get("failed", 0) > 0 or str(job.get("state")).lower() in ("failed", "error"):
-                raise RuntimeError(job.get("error") or "Xdeck 側で投稿に失敗しました")
+                raise RuntimeError(job_error(job))
             label = ((job.get("steps") or [{}])[0].get("label") or "").replace("@", "")
             if label and job.get("tweet_id"):
                 result["link"] = f"https://x.com/{label}/status/{job['tweet_id']}"
@@ -126,6 +130,14 @@ async def run_due_posts() -> None:
             status = "done"
         except Exception as e:  # noqa: BLE001
             status, result["error"] = "failed", str(e)[:300]
+            # 通信の不調で投稿前に止まった失敗は、そのアカウントのブラウザを再起動して自動でやり直す
+            if any(k in result["error"] for k in RETRYABLE) and x.get("auto_retries", 0) < AUTO_RETRIES:
+                restarted = await asyncio.to_thread(stop_browser, x["profile_id"])
+                status = "pending"
+                result.update(at=(datetime.now() + timedelta(minutes=AUTO_RETRY_MIN)).isoformat(timespec="minutes"),
+                              auto_retries=x.get("auto_retries", 0) + 1, last_error=result.pop("error"))
+                print(f"scheduler: {x['profile_name']} 投稿前の通信エラー。ブラウザ再起動={'済' if restarted else '失敗'}、"
+                      f"{AUTO_RETRY_MIN}分後にやり直します({result['auto_retries']}/{AUTO_RETRIES})")
         async with SCHED_LOCK:
             items = load_sched()
             for y in items:

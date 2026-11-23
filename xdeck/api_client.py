@@ -42,3 +42,19 @@ async def wait_job(jid, tries: int = 60) -> dict:
             return job
         await asyncio.sleep(2)
     raise JobTimeout(f"Xdeck の処理が{tries * 2}秒以内に終わりませんでした。投稿されたかどうかは X で確認してください")
+
+
+def job_error(job: dict, default: str = "Xdeck 側で投稿に失敗しました") -> str:
+    """Xdeck のジョブの失敗理由。job["error"] は空のことが多く、本当の理由は steps[].error に入っている"""
+    msgs = [str(s["error"]).strip() for s in (job.get("steps") or []) if s.get("error")]
+    return (job.get("error") or " / ".join(dict.fromkeys(msgs)) or default)[:300]
+
+
+def stop_browser(profile_id: str) -> bool:
+    """アカウントのブラウザ(Xdeck 上の)を止める。次にそのアカウントで操作すると、Xdeck が自動で起動し直す。
+    通信が通らなくなったアカウントは、これで復活することが多い。失敗しても例外は出さない"""
+    try:
+        return api("GET", "browser/stop", params={"profile_id": profile_id}, timeout=30).get("code") == 0
+    except Exception as e:  # noqa: BLE001
+        print("browser stop error:", str(e)[:100])
+        return False

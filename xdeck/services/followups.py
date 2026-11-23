@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ..api_client import JobTimeout, api, wait_job
+from ..api_client import JobTimeout, api, job_error, wait_job
 from ..config import (ENT, FOLLOWUP_MAX_TRIES, LIKE_CHECK_MIN, LIKE_TARGET, LIKE_WINDOW_H, FOLLOWUP_TEXT, FOLLOWUP_TEXT_ENT, FOLLOWUP_WINDOW_H,
                       ADULT_STATE_DIR, RECOMMEND_N, STATE_DIR)
 from ..storage import append_posts_log, read_posts_log, write_json_atomic
@@ -79,7 +79,7 @@ async def post_followup(profile_id: str, tweet_id: str, text: str) -> str:
     jid = (res.get("data") or {}).get("job_id")
     job = await wait_job(jid)
     if job.get("failed", 0) > 0 or str(job.get("state")).lower() in ("failed", "error"):
-        raise RuntimeError(job.get("error") or "Xdeck 側でリプの投稿に失敗しました")
+        raise RuntimeError(job_error(job, "Xdeck 側でリプの投稿に失敗しました"))
     return str(job.get("tweet_id") or "")
 
 
