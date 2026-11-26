@@ -24,12 +24,35 @@ function matches(w){
   const hay=[...w.posts.map(p=>p.author+' '+p.text),...w.urls.map(u=>u.url)].join(' ').toLowerCase();
   return hay.includes(query);
 }
+// 占い用: 投稿の予定。予約があればその日時と状態、なければ計画の日時(未予約)
+const STL={pending:'予約済み',running:'投稿中',done:'投稿済み',failed:'失敗',missed:'見送り'};
+function planOf(w){
+  const s=w.sched;
+  if(s)return {t:s.at,label:STL[s.status]||s.status,cls:s.status};
+  return w.planned_at?{t:w.planned_at,label:'未予約',cls:'plan'}:null;
+}
+function fortuneSec(w){
+  const pl=planOf(w),t=(w.planned_at||'').slice(0,16);
+  return `<section class="sec"><h3>投稿の予定</h3>
+    <div class="note" style="margin:0 0 8px">${pl?`🕒 ${fmt(pl.t)}・${pl.label}`:'日時が未設定です'}</div>
+    <div class="affrow"><input id="fplan" type="datetime-local" value="${esc(t)}" aria-label="投稿予定の日時"><button class="btn primary" id="fplansave">予定を保存</button></div>
+    <div class="note">予定を保存しても、予約はまだ入りません(予約前の計画です)。予約済みの投稿の日時は、予約履歴で変更します。</div></section>
+    ${(w.thread&&w.thread.length)?`<section class="sec"><h3>本文の続き(投稿の直後に、自分で返信して出ます)</h3>${w.thread.map((t,i)=>`<div class="note" style="margin:0 0 4px">続き${i+1}</div><div style="white-space:pre-wrap;margin-bottom:8px">${esc(t)}</div>`).join('')}</section>`:''}
+    <section class="sec"><h3>続きのリプ(自動)</h3>
+    <div class="note" style="margin:0 0 8px">この投稿が <b>表示2,500</b> か <b>いいね40</b> に届くと、同じアカウントから、次の順で自動でリプします。</div>
+    <div class="note" style="margin:0 0 4px">① 1つ目のリプ(本文を、1投稿ごとに変えられます)</div>
+    <textarea id="ftext" rows="5" style="width:100%" aria-label="1つ目のリプ">${esc(w.followup_text||'')}</textarea>
+    <div class="note" style="margin:10px 0 4px">② 2つ目のリプ(リンク。計測用のコードを含むので、書き換えないでください)</div>
+    <div class="affrow"><input id="faff" type="url" value="${esc(w.affiliate||'')}" aria-label="リプのリンク"><button class="btn" id="faffcopy">コピー</button></div>
+    <div class="row" style="margin-top:10px"><button class="btn primary" id="ftextsave">リプの内容を保存</button></div>
+    <div class="note" id="fnote">広告表記(【PR】)を、1つ目のリプに必ず入れてください。届いていない間は、リプは出ません。</div></section>`;
+}
 const hasMedia=w=>w.posts.some(p=>p.videos.length||p.images.length);
 const noAff=w=>!IS_ENT&&!(w.affiliate||'').trim();   // アダルト用: アフィリエイトリンク未登録
 const wtOf=w=>noAff(w)?0:Math.max(0,w.weight==null?1:Number(w.weight)||0);  // 未登録は重み0(一括予約で選ばれない)
 // 一括予約でこの作品が選ばれる確率(%)=この作品の重み ÷ 動画・画像のある全作品の重みの合計。エンタメ用・メディアなしは null
 function pctOf(w){
-  if(IS_ENT||!hasMedia(w))return null;
+  if(IS_ENT||IS_FORTUNE||!hasMedia(w))return null;
   const tot=works.filter(hasMedia).reduce((n,x)=>n+wtOf(x),0);
   return tot>0?wtOf(w)/tot*100:0;
 }
@@ -37,7 +60,7 @@ const NOAFF_MSG='アフィリエイトリンクが未登録のため、一括予
 const fmtPct=v=>(v>=10||v===0?Math.round(v):Math.round(v*10)/10)+'%';
 function render(){
   let list=works.filter(matches);
-  if(!IS_ENT){  // 選ばれる確率が高い順(同じ確率なら従来どおり更新が新しい順)。動画・画像のない作品は最後
+  if(!IS_ENT&&!IS_FORTUNE){  // 選ばれる確率が高い順(同じ確率なら従来どおり更新が新しい順)。動画・画像のない作品は最後
     const pc=new Map(list.map(w=>[w,pctOf(w)??-1]));
     list=list.sort((x,y)=>pc.get(y)-pc.get(x));
   }
@@ -47,9 +70,9 @@ function render(){
     return `<button class="card${off?' off':''}" data-w="${esc(w.work_id)}"${off&&!na?' title="選ばれやすさ0: 一括予約の自動選択から外れています"':''}>
       <div class="thumb">${t?`<img src="${t}" loading="lazy" alt="">`:'<div class="none">メディアなし</div>'}
         ${na?`<span class="warn" title="${NOAFF_MSG}" aria-label="アフィリエイトリンク未登録">⚠</span>`:''}
-        <div class="overlay">${nv?`<span class="pill">▶ 動画${nv}</span>`:''}<span class="pill">投稿${w.posts.length}</span>${pc==null?'':`<span class="pill pct" title="一括予約で選ばれる確率">🎲 ${fmtPct(pc)}</span>`}</div></div>
+        <div class="overlay">${nv?`<span class="pill">▶ 動画${nv}</span>`:''}${IS_FORTUNE?'':`<span class="pill">投稿${w.posts.length}</span>`}${(()=>{const pl=IS_FORTUNE?planOf(w):null;return pl?`<span class="pill plan ${pl.cls}" title="投稿予定">🕒 ${fmt(pl.t)}・${pl.label}</span>`:''})()}${pc==null?'':`<span class="pill pct" title="一括予約で選ばれる確率">🎲 ${fmtPct(pc)}</span>`}</div></div>
       <div class="body"><div class="author">${esc(p.author||'(投稿なし)')}</div>
-        <div class="excerpt">${esc(p.text||'')}</div>
+        <div class="excerpt${IS_FORTUNE?' full':''}">${esc(p.text||'')}</div>
         <div class="foot">${[...new Set(w.urls.map(u=>u.site))].map(s=>`<span class="site ${s}">${s}</span>`).join('')}
           <span>更新 ${fmt(w.updated_at)}</span></div></div></button>`;}).join('')
     :`<div class="empty">${works.length?'条件に合う作品がありません':'まだ保存された作品がありません。Discord に X のリンクを送ってください。'}</div>`;
@@ -102,19 +125,20 @@ async function drawDrawer(w){
   d.innerHTML=`<header><h2>作品の詳細</h2><span class="note" style="margin:0">作成 ${fmt(w.created_at)} ・ 更新 ${fmt(w.updated_at)}</span>
       <button class="iconbtn" id="dclose" aria-label="閉じる">✕</button></header>
     <div class="scroll">
-      ${IS_ENT?'':`<section class="sec"><h3>アフィリエイトリンク</h3>
+      ${IS_FORTUNE?fortuneSec(w):''}
+      ${IS_ENT||IS_FORTUNE?'':`<section class="sec"><h3>アフィリエイトリンク</h3>
         <div class="affrow"><input id="aff" type="url" inputmode="url" placeholder="MyFansで作成したURLを貼り付け" value="${esc(w.affiliate||'')}" aria-label="アフィリエイトリンク">
           <button class="btn primary" id="affsave">保存</button><button class="btn" id="affcopy" ${w.affiliate?'':'disabled'}>コピー</button></div>
         <div class="row" style="margin-top:8px"><button class="btn primary" id="affopen">↗ MyFansアフィリンクを作成</button></div>
         <div class="note" id="affnote">${w.affiliate?'':'「MyFansアフィリンクを作成」を押すと作成ページが開きます。できたリンクをここに貼り付けて「保存」を押してください。'}</div></section>`}
-      ${IS_ENT?'':`<section class="sec"><h3>選ばれやすさ(一括予約のランダム選択)</h3>
+      ${IS_ENT||IS_FORTUNE?'':`<section class="sec"><h3>選ばれやすさ(一括予約のランダム選択)</h3>
         <div class="affrow"><input id="wt" type="number" min="0" max="10" step="0.5" value="${w.weight==null?1:w.weight}" style="max-width:110px" aria-label="選ばれやすさ">
           <button class="btn primary" id="wtsave">保存</button></div>
         <div class="note" id="wtnote">${noAff(w)?'⚠ '+NOAFF_MSG+'。':''}標準=1 / 2にすると標準の2倍選ばれやすい / 0.5で半分 / 0で自動選択から外す(0〜10)。作品ごとの確率は「この作品の重み ÷ 全作品の重みの合計」です。</div></section>`}
-      <section class="sec"><h3>作品URL</h3>${w.urls.length?w.urls.map(u=>`<div class="urlrow"><span class="site ${u.site}">${u.site}</span>
+      ${IS_FORTUNE?'':`<section class="sec"><h3>作品URL</h3>${w.urls.length?w.urls.map(u=>`<div class="urlrow"><span class="site ${u.site}">${u.site}</span>
         <a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a>
         <button class="btn sm" data-copyurl="${esc(u.url)}">コピー</button><span class="note" style="margin:0">${fmt(u.added_at)}</span></div>`).join('')
-        :'<div class="note">スレッドに MyFans / FANZA の URL を送ると、ここに表示されます。</div>'}</section>
+        :'<div class="note">スレッドに MyFans / FANZA の URL を送ると、ここに表示されます。</div>'}</section>`}
       <section class="sec"><h3>保存した投稿(${w.posts.length}件)</h3>${w.posts.map(p=>`<div class="post">
         <div class="meta"><b>${esc(p.author)}</b><span>🕒 保存 ${fmt(p.saved_at)}</span><a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:#8ecdf8;font-size:12px">元の投稿</a>
           ${p.discord&&p.discord.url?`<a href="${esc(p.discord.url)}" target="_blank" rel="noopener" style="color:#8ecdf8;font-size:12px">Discordで開く${p.discord.thread?'('+esc(p.discord.thread)+')':''}</a>`:''}
@@ -137,6 +161,23 @@ async function drawDrawer(w){
     try{await api('/api/delete_work',{method:'POST',body:JSON.stringify({work_id:w.work_id})});closeDrawer();await load();toast('作品を削除しました(_trash に移動)');}
     catch(e){toast('削除に失敗: '+e.message,true);}
   };
+  if(IS_FORTUNE){
+    $('#fplansave').onclick=async()=>{
+      const v=$('#fplan').value;
+      if(!v){toast('日時を入れてください',true);return;}
+      try{const r=await api('/api/fortune/plan',{method:'POST',body:JSON.stringify({work_id:w.work_id,planned_at:v})});w.planned_at=r.planned_at;render();toast('予定を保存しました ✓(予約はまだです)');}
+      catch(e){toast('保存に失敗: '+e.message,true);}
+    };
+    $('#ftextsave').onclick=async()=>{
+      const text=$('#ftext').value.trim(),url=$('#faff').value.trim();
+      try{
+        await api('/api/fortune/plan',{method:'POST',body:JSON.stringify({work_id:w.work_id,followup_text:text})});
+        const r=await api('/api/affiliate',{method:'POST',body:JSON.stringify({work_id:w.work_id,url})});
+        w.followup_text=text;w.affiliate=r.affiliate;$('#fnote').textContent='保存しました ✓';toast('リプの内容を保存しました ✓');
+      }catch(e){toast('保存に失敗: '+e.message,true);}
+    };
+    $('#faffcopy').onclick=()=>{navigator.clipboard.writeText($('#faff').value).then(()=>toast('リンクをコピーしました ✓'),()=>toast('コピーに失敗しました',true));};
+  }
   const wt=$('#wt');
   if(wt){
     const wsave=async()=>{
@@ -395,7 +436,25 @@ async function submitPost(){
 
 /* ===== 一括予約 ===== */
 let BK=null;
+async function openFortuneBulk(){
+  // 占い用: 準備完了の投稿案を、それぞれに設定した日時で予約する
+  const pn=$('#bulkpanel');pn.hidden=false;
+  const draw=(inner)=>{pn.innerHTML=`<div class="sheet"><header><h2>一括予約投稿(占い)</h2><button class="iconbtn" id="bclose" aria-label="閉じる">✕</button></header><div class="content">${inner}</div></div>`;$('#bclose').onclick=()=>{pn.hidden=true;pn.innerHTML='';};};
+  draw('<div class="note">確認中…</div>');
+  let r;try{r=await api('/api/fortune/schedule_all',{method:'POST',body:JSON.stringify({dry:true})});}catch(e){draw(`<div class="note">${esc(e.message)}</div>`);return;}
+  const ok=r.items.filter(x=>x.ok),ng=r.items.filter(x=>!x.ok);
+  draw(`<div class="note" style="margin-bottom:10px">各投稿案に設定した日時で、<b>${esc(r.profile)}</b> から予約します。続きのリプや、2,500表示後の自動リプも、そのまま働きます。</div>
+    ${ok.map(x=>`<div class="note" style="margin:0 0 4px">🕒 ${fmt(x.at)}　${esc(x.text)}</div>`).join('')||'<div class="note">予約できる投稿案がありません</div>'}
+    ${ng.length?`<div class="note" style="margin-top:10px">対象外 ${ng.length}件: ${ng.map(x=>esc(x.reason)).filter((v,i,a)=>a.indexOf(v)===i).join('、')}</div>`:''}
+    <div style="margin-top:14px"><button class="btn go block" id="fbrun" ${ok.length?'':'disabled'}>${ok.length}件を予約する</button></div><div class="note" id="fbnote"></div>`);
+  $('#fbrun').onclick=async()=>{
+    $('#fbrun').disabled=true;
+    try{const o=await api('/api/fortune/schedule_all',{method:'POST',body:JSON.stringify({})});$('#fbnote').textContent=`${o.made}件を予約しました ✓(予約履歴で確認できます)`;toast(`${o.made}件を予約しました ✓`);if(typeof load==='function')load();}
+    catch(e){$('#fbnote').textContent='失敗: '+e.message;$('#fbrun').disabled=false;}
+  };
+}
 async function openBulk(){
+  if(IS_FORTUNE)return openFortuneBulk();
   // 投稿する時間帯の初期値: 開始=今の時刻、終了=その2時間後(日をまたぐ場合は終了日も翌日)
   const t=new Date(),e=new Date(t.getTime()+2*3600e3);
   BK={sel:new Set(),q:'',sd:ymd(t),st:hm(t),ed:ymd(e),et:hm(e),per:1,state:'form',preset:''};
@@ -693,6 +752,7 @@ function drawSched(){
   const rows=[...SCHED].sort((a,b)=>a.at<b.at?1:a.at>b.at?-1:0).map(x=>{const st=SLBL[x.status]||['',x.status];
     return `<div class="srow"><div class="when">${esc(fmtAt(x.at))}${x.status==='pending'?`<div class="note" style="margin:2px 0 0">${esc(remain(x.at))}</div>`:''}</div><div class="main"><b>${esc(x.profile_name)}</b> ${badge(st[0],esc(st[1]))}
       <div class="stx">${esc(x.text)}</div>${x.error?`<div class="note" style="color:var(--err)">${esc(x.error)}</div>`:''}
+      ${x.status==='pending'&&x.auto_retries?`<div class="note" style="color:var(--warn)">自動再実行 ${x.auto_retries}回目の待機中(前回の失敗: ${esc(x.last_error||'')})</div>`:''}${(x.retry_log||[]).map(l=>`<div class="note" style="margin:2px 0 0">${esc(l)}</div>`).join('')}
       ${x.link?`<a href="${esc(x.link)}" target="_blank" rel="noopener">X で開く</a>`:''}</div>
       <div class="row" style="flex-direction:column;gap:6px">${x.status==='failed'||x.status==='missed'?`<button class="btn primary" data-retry="${esc(x.id)}">再試行</button>`:''}<button class="btn sdel" data-s="${esc(x.id)}" ${x.status==='running'?'disabled':''}>${x.status==='pending'?'取り消す':'削除'}</button></div></div>`;}).join('');
   const nfail=SCHED.filter(x=>x.status==='failed'||x.status==='missed').length;

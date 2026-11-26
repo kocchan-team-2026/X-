@@ -5,11 +5,11 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ..api_client import JobTimeout, api, job_error, wait_job
-from ..config import (ENT, FOLLOWUP_MAX_TRIES, LIKE_CHECK_MIN, LIKE_TARGET, LIKE_WINDOW_H, FOLLOWUP_TEXT, FOLLOWUP_TEXT_ENT, FOLLOWUP_WINDOW_H,
+from ..api_client import JobTimeout, api, job_error, stop_browser, wait_job
+from ..config import (ENT, FORTUNE, FOLLOWUP_TEXT_URANAI, FOLLOWUP_MAX_TRIES, IMP_TARGET, LIKE_CHECK_MIN, LIKE_TARGET, LIKE_WINDOW_H, FOLLOWUP_TEXT, FOLLOWUP_TEXT_ENT, FOLLOWUP_WINDOW_H,
                       ADULT_STATE_DIR, RECOMMEND_N, STATE_DIR)
 from ..storage import append_posts_log, read_posts_log, write_json_atomic
-from .works import work_affiliate
+from .works import work_affiliate, work_followup_text
 
 
 FOLLOWUP_FILE = lambda: STATE_DIR / "_followups.json"  # noqa: E731
@@ -87,10 +87,11 @@ _like_checked = datetime.min
 
 
 async def liked_enough(st: dict, mine: dict[str, dict]) -> list[dict]:
-    """このボードから最近(LIKE_WINDOW_H時間以内)投稿した投稿のうち、いいねが LIKE_TARGET 以上のもの。
-    Xdeck のインプ通知と同じ形({tweetId, reachedAt})で返す。確認は LIKE_CHECK_MIN 分おき"""
+    """このボードから最近(LIKE_WINDOW_H時間以内)投稿した投稿のうち、いいねが LIKE_TARGET 以上、またはインプ(表示)が
+    IMP_TARGET 以上のもの。Xdeck のインプ通知と同じ形({tweetId, reachedAt})で返す。確認は LIKE_CHECK_MIN 分おき。
+    (Xdeck のインプ通知が取得エラーで止まっていても、こちらで拾えるように、インプも自分で確認する)"""
     global _like_checked
-    if LIKE_TARGET <= 0 or datetime.now() - _like_checked < timedelta(minutes=LIKE_CHECK_MIN):
+    if datetime.now() - _like_checked < timedelta(minutes=LIKE_CHECK_MIN):
         return []
     _like_checked = datetime.now()
     since = (datetime.now() - timedelta(hours=LIKE_WINDOW_H)).isoformat(timespec="seconds")
@@ -101,13 +102,21 @@ async def liked_enough(st: dict, mine: dict[str, dict]) -> list[dict]:
 
     async def one(tid: str, m: dict) -> None:
         async with sem:
-            try:
-                r = await asyncio.to_thread(api, "GET", "x/tweet", params={"profile_id": m["profile_id"], "tweet": tid}, timeout=90)
-                likes = ((r.get("data") or {}).get("counts") or {}).get("favorites") or 0
-            except Exception as e:  # noqa: BLE001
-                print(f"followup: いいね数の取得に失敗 {tid}: {str(e)[:80]}")
+            counts: dict = {}
+            for attempt in range(2):
+                try:
+                    r = await asyncio.to_thread(api, "GET", "x/tweet", params={"profile_id": m["profile_id"], "tweet": tid}, timeout=90)
+                    counts = (r.get("data") or {}).get("counts") or {}
+                    break
+                except Exception as e:  # noqa: BLE001
+                    print(f"followup: 反応数の取得に失敗 {tid}: {str(e)[:80]}")
+                    if attempt == 0:  # 通信が通らなくなったアカウントは、ブラウザを再起動すると直ることが多い
+                        await asyncio.to_thread(stop_browser, m["profile_id"])
+                        await asyncio.sleep(3)
+            else:
                 return
-        if likes >= LIKE_TARGET:
+        likes, views = counts.get("favorites") or 0, counts.get("views") or 0
+        if (LIKE_TARGET > 0 and likes >= LIKE_TARGET) or (IMP_TARGET > 0 and views >= IMP_TARGET):
             hit.append({"tweetId": tid, "reachedAt": datetime.now().timestamp() * 1000})
 
     await asyncio.gather(*(one(t, m) for t, m in cands.items()))
@@ -149,6 +158,8 @@ async def run_followups() -> None:
             url = await asyncio.to_thread(work_affiliate, m["work_id"])
             links = [url] if url else []
             first = FOLLOWUP_TEXT
+            if FORTUNE:  # 占い用: 先生ごとの紹介文(なければ共通文)。広告表記(PR)を必ず含める
+                first = await asyncio.to_thread(work_followup_text, m["work_id"]) or FOLLOWUP_TEXT_URANAI
             lack = "作品にアフィリエイトリンクが未登録"
         if not links:
             s["state"] = "waiting"

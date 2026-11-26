@@ -85,7 +85,7 @@ async def api_sched_retry(req):
             if any(not Path(p).exists() for p in x.get("media", [])):
                 x["error"] = "添付ファイルが残っていないため再試行できません(削除して作り直してください)"
                 continue
-            for k in ("error", "finished", "link", "imp_alert"):
+            for k in ("error", "finished", "link", "imp_alert", "auto_retries", "retry_log", "last_error", "error_kind"):
                 x.pop(k, None)
             x["status"] = "pending"
             x["at"] = datetime.now().isoformat(timespec="minutes")

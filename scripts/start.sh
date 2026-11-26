@@ -12,6 +12,8 @@ envval() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | tr -d "\"' "; }
 PORT="$(envval GALLERY_PORT)"; PORT="${PORT:-8765}"
 PORT_ENT="$(envval GALLERY_PORT_ENT)"; PORT_ENT="${PORT_ENT:-8766}"
 USE_ENT="$(envval CHANNEL_IDS_ENT)"
+PORT_URANAI="$(envval GALLERY_PORT_URANAI)"; PORT_URANAI="${PORT_URANAI:-8767}"
+USE_URANAI="$(envval CHANNEL_IDS_URANAI)"
 
 listening() { /usr/sbin/lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 start() { # ポート, 引数
@@ -19,8 +21,9 @@ start() { # ポート, 引数
 }
 start "$PORT" ""
 [ -n "$USE_ENT" ] && start "$PORT_ENT" "ent"
+[ -n "$USE_URANAI" ] && start "$PORT_URANAI" "uranai"
 
-for p in "$PORT" ${USE_ENT:+$PORT_ENT}; do
+for p in "$PORT" ${USE_ENT:+$PORT_ENT} ${USE_URANAI:+$PORT_URANAI}; do
   for _ in $(seq 1 30); do listening "$p" && break; sleep 1; done
 done
 listening "$PORT" || { echo "起動に失敗しました。ログ: $LOG"; exit 1; }

@@ -10,7 +10,7 @@ import os
 
 from aiohttp import web
 
-from ..config import ENT, POSTS_DIR, STATE_DIR, WORKS_DIR
+from ..config import ENT, FORTUNE, POSTS_DIR, STATE_DIR, WORKS_DIR
 from ..media import copy_file_to_clipboard, edit_video, make_thumb
 from ..rewrite import rewrite_text
 from ..services.works import list_items
@@ -206,3 +206,72 @@ async def api_weight(req):
         raise web.HTTPBadRequest(text="0〜10の数値を入れてください")
     update_work(wid, weight=wt)
     return web.json_response({"weight": wt})
+
+
+@routes.post("/api/fortune/plan")
+async def api_fortune_plan(req):
+    """占い用: 投稿の予定日時(planned_at)と、1つ目のリプの本文(followup_text)を保存する。どちらか片方だけでもよい"""
+    if not FORTUNE:
+        raise web.HTTPNotFound()
+    b = await req.json()
+    wid = str(b.get("work_id", ""))
+    if not wid or "/" in wid or wid.startswith("."):
+        raise web.HTTPBadRequest(text="invalid work_id")
+    fields = {}
+    if "planned_at" in b:
+        try:
+            fields["planned_at"] = datetime.fromisoformat(str(b["planned_at"])).isoformat(timespec="minutes")
+        except ValueError:
+            raise web.HTTPBadRequest(text="日時の形式が正しくありません")
+    if "followup_text" in b:
+        text = str(b["followup_text"]).strip()
+        if len(text) > 270:
+            raise web.HTTPBadRequest(text="リプは270文字以内にしてください")
+        fields["followup_text"] = text
+    update_work(wid, **fields)
+    return web.json_response(fields)
+
+
+@routes.post("/api/fortune/schedule_all")
+async def api_fortune_schedule_all(req):
+    """占い用の一括予約: 「準備完了」の投稿案を、それぞれに設定した日時(planned_at)で予約する。
+    準備完了 = 本文がある・日時が未来・リプの文とリンクが入っている・まだ予約していない。dry=true なら、予約せず内容だけ返す"""
+    if not FORTUNE:
+        raise web.HTTPNotFound()
+    from ..api_client import api
+    from ..config import group_ok
+    from ..services.scheduler import add_sched
+    b = await req.json() if req.can_read_body else {}
+    prof = (await asyncio.to_thread(api, "GET", "profile/list"))["data"]["list"]
+    groups = (await asyncio.to_thread(api, "GET", "group/list"))["data"]["list"]
+    gname = {g["group_id"]: g["name"] for g in groups}
+    cands = [p for p in prof if group_ok(gname.get(p["group_id"], ""))]
+    if b.get("profile_id"):
+        cands = [p for p in cands if p["profile_id"] == b["profile_id"]]
+    if len(cands) != 1:
+        raise web.HTTPBadRequest(text="占いのアカウントを1つに決められません(占いグループのアカウントを確認してください)")
+    target = cands[0]
+    now = datetime.now()
+    items, made = [], 0
+    for w in sorted(list_items(), key=lambda x: x.get("planned_at") or "9"):
+        text = (w["posts"][0]["text"] if w.get("posts") else "").strip()
+        at = w.get("planned_at") or ""
+        row = {"work_id": w["work_id"], "at": at, "text": text[:40], "ok": False, "reason": ""}
+        st = (w.get("sched") or {}).get("status")
+        if not text:
+            row["reason"] = "本文がありません"
+        elif not at:
+            row["reason"] = "投稿の日時が未設定です"
+        elif datetime.fromisoformat(at) <= now:
+            row["reason"] = "日時が過ぎています"
+        elif st in ("pending", "running", "done"):
+            row["reason"] = "予約済み"
+        elif not (w.get("followup_text") or "").strip() or not (w.get("affiliate") or "").strip():
+            row["reason"] = "リプの文かリンクが未設定です"
+        else:
+            row["ok"] = True
+            if not b.get("dry"):
+                await add_sched(w["work_id"], target["profile_id"], target["name"], text, [], datetime.fromisoformat(at))
+                made += 1
+        items.append(row)
+    return web.json_response({"profile": target["name"], "items": items, "made": made})

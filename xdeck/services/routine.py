@@ -11,7 +11,7 @@ import shutil
 from datetime import datetime, timedelta
 
 from ..api_client import api, get_profiles
-from ..config import ENT, STATE_DIR, group_ok
+from ..config import ENT, FORTUNE, STATE_DIR, group_ok
 from ..storage import load_sched, save_sched, write_json_atomic
 from .bulk import BULK, run_bulk
 from .imps import last_tweets
@@ -24,13 +24,13 @@ TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$")
 ROUTINE_LOCK = asyncio.Lock()
 
 # mode: all=全アカウント / imp_below=その日の前の投稿のimpが imp_max 以下のアカウントだけ
-DEFAULT_SLOTS = ([
+DEFAULT_SLOTS = [] if FORTUNE else ([
     {"id": "am", "label": "朝", "start": "06:00", "end": "10:00", "mode": "all", "enabled": True},
     {"id": "pm", "label": "午後", "start": "14:00", "end": "17:00", "mode": "all", "enabled": True},
     {"id": "night", "label": "夜", "start": "22:00", "end": "24:00", "mode": "all", "enabled": True},
 ] if ENT else [
-    {"id": "am", "label": "朝", "start": "06:00", "end": "09:00", "mode": "all", "enabled": True},
-    {"id": "pm", "label": "午後", "start": "14:00", "end": "17:00", "mode": "imp_below", "imp_max": 1000, "enabled": True},
+    {"id": "am", "label": "朝", "start": "12:00", "end": "15:00", "mode": "all", "enabled": True},
+    {"id": "pm", "label": "夜", "start": "17:00", "end": "20:00", "mode": "imp_below", "imp_max": 1000, "enabled": True},
 ])
 
 

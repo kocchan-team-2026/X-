@@ -6,7 +6,7 @@ import discord
 
 from .config import (CHANNEL_IDS, ENT, ENT_CHANNELS, FOLLOWUP_ON, GALLERY_URL, POSTS_DIR, STATE_DIR,
                      URL_RE)
-from .services import discord_link, status
+from .services import discord_link, recovery, status
 from .services.followups import followup_loop
 from .services.routine import routine_loop
 from .services.scheduler import scheduler_loop
@@ -25,6 +25,7 @@ class Bot(discord.Client):
         status.set_client(self)
         await start_web()
         self.sched_task = asyncio.create_task(scheduler_loop())
+        self.watchdog_task = asyncio.create_task(recovery.watchdog_loop())
         self.routine_task = asyncio.create_task(routine_loop())
         if FOLLOWUP_ON:
             self.followup_task = asyncio.create_task(followup_loop())

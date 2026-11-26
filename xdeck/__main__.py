@@ -1,13 +1,16 @@
 """起動: python -m xdeck [ent]"""
 import sys
 
-from .config import ENT, ENT_CHANNELS, TOKEN
+from .config import ENT, ENT_CHANNELS, FORTUNE, FORTUNE_CHANNELS, TOKEN
 from .migrate import migrate_legacy_data, repair_sched_paths
 
 if not TOKEN:
     sys.exit(".env に DISCORD_BOT_TOKEN がありません。./scripts/setup.sh を実行するか、.env.example を .env にコピーして入力してください")
 if ENT and not ENT_CHANNELS:
     sys.exit("エンタメ用ボードには .env に CHANNEL_IDS_ENT=<チャンネルID> が必要です")
+
+if FORTUNE and not FORTUNE_CHANNELS:
+    sys.exit("占い用ボードには .env に CHANNEL_IDS_URANAI=<チャンネルID> が必要です")
 
 migrate_legacy_data()
 repair_sched_paths()

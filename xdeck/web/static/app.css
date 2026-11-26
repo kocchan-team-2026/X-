@@ -196,3 +196,10 @@ details summary{cursor:pointer;color:var(--muted)}
 .conn .c.bad .d{background:#fff}
 .conn .c.unk .d{background:#888}
 @media (max-width:640px){.conn .t{display:none}.conn .c.bad .t{display:inline}}
+
+/* 占い用: 1投稿=1カード。本文を全文表示し、投稿予定の日時を目立たせる */
+.excerpt.full{display:block;-webkit-line-clamp:unset;max-height:none;white-space:pre-line}
+.pill.plan{background:#3b2f6b;color:#f1e6c8}
+.pill.plan.pending{background:#1f4fbf;color:#fff}
+.pill.plan.done{background:#1c6b45;color:#fff}
+.pill.plan.failed,.pill.plan.missed{background:#8a2230;color:#fff}

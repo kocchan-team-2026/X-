@@ -5,16 +5,14 @@ import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ..api_client import api, job_error, register_imp_alert, stop_browser, wait_job
+from ..api_client import JobTimeout, api, job_error, register_imp_alert, wait_job
 from ..config import POSTS_DIR, SCHED_GRACE_MIN, STATE_DIR
+from . import recovery
+from .works import work_thread
 from ..storage import append_posts_log, load_sched, read_posts_log, save_sched
 
 
 SCHED_LOCK = asyncio.Lock()
-AUTO_RETRIES = 2     # 通信の失敗のとき、アカウントのブラウザを再起動して自動でやり直す回数
-AUTO_RETRY_MIN = 2   # やり直しまでの間隔(分)
-# まだ投稿されていない段階の失敗(やり直しても二重投稿にならない)
-RETRYABLE = ("メディアのアップロードに失敗", "ページ内でエラー")
 
 
 def media_key(path: str) -> str:
@@ -113,8 +111,13 @@ async def run_due_posts() -> None:
                 x["status"] = "running"
         if due:
             save_sched(items)
+    failures: list[str] = []  # 自動再実行でも投稿できなかったもの(まとめて Discord に通知)
+    missed = [d for d in due if d["status"] == "missed"]
+    if missed:
+        failures += [f"・{d['profile_name']} {d['at'][5:16].replace('T', ' ')} 「{d['text'][:25]}」 → 予約時刻に停止していたため見送り" for d in missed]
     for x in [d for d in due if d["status"] == "running"]:
         result: dict = {}
+        job: dict = {}
         try:
             res = await send_post(x["work_id"], x["profile_id"], x["text"], x["media"], x.get("src"))
             if res.get("code") != 0:
@@ -122,22 +125,44 @@ async def run_due_posts() -> None:
             jid = (res.get("data") or {}).get("job_id")
             job = await wait_job(jid)
             if job.get("failed", 0) > 0 or str(job.get("state")).lower() in ("failed", "error"):
+                if job_error(job, "") == "":  # 終了直後は理由がまだ入っていないことがある。少し待って取り直す
+                    await asyncio.sleep(2)
+                    job = ((await asyncio.to_thread(api, "GET", "x/bulk/status", params={"job_id": jid, "id": jid})).get("data")) or job
                 raise RuntimeError(job_error(job))
             label = ((job.get("steps") or [{}])[0].get("label") or "").replace("@", "")
             if label and job.get("tweet_id"):
                 result["link"] = f"https://x.com/{label}/status/{job['tweet_id']}"
                 result["imp_alert"] = await asyncio.to_thread(register_imp_alert, result["link"])
             status = "done"
+            if job.get("tweet_id"):  # 続き(長文の残り)を、自分の投稿への返信として順に出す
+                prev = str(job["tweet_id"])
+                try:
+                    from .followups import post_followup  # 循環import回避
+                    for part in work_thread(x["work_id"]):
+                        prev = await post_followup(x["profile_id"], prev, part) or prev
+                except Exception as e2:  # noqa: BLE001
+                    result["thread_error"] = str(e2)[:200]
+                    failures.append(f"・{x['profile_name']} 「{x['text'][:25]}」 本文は投稿できましたが、続きのリプで失敗: {str(e2)[:120]}")
         except Exception as e:  # noqa: BLE001
-            status, result["error"] = "failed", str(e)[:300]
-            # 通信の不調で投稿前に止まった失敗は、そのアカウントのブラウザを再起動して自動でやり直す
-            if any(k in result["error"] for k in RETRYABLE) and x.get("auto_retries", 0) < AUTO_RETRIES:
-                restarted = await asyncio.to_thread(stop_browser, x["profile_id"])
+            status, err = "failed", str(e)[:300]
+            result["error"] = err
+            kind = recovery.classify(err, timeout=isinstance(e, JobTimeout), posted=bool(job.get("tweet_id")))
+            n = x.get("auto_retries", 0)
+            log = list(x.get("retry_log", []))
+            if kind in recovery.RETRY_KINDS and n < recovery.RETRY_MAX[kind]:
+                # 原因に合わせて対処し、間をあけて(2分→10分→30分後)自動で再実行する。まだ投稿されていない失敗だけ
+                did = await recovery.remedy(kind, x["profile_id"])
+                wait = recovery.RETRY_DELAYS_MIN[n]
+                log.append(f"{datetime.now():%H:%M} {recovery.KIND_LABEL[kind]} → {did}")
                 status = "pending"
-                result.update(at=(datetime.now() + timedelta(minutes=AUTO_RETRY_MIN)).isoformat(timespec="minutes"),
-                              auto_retries=x.get("auto_retries", 0) + 1, last_error=result.pop("error"))
-                print(f"scheduler: {x['profile_name']} 投稿前の通信エラー。ブラウザ再起動={'済' if restarted else '失敗'}、"
-                      f"{AUTO_RETRY_MIN}分後にやり直します({result['auto_retries']}/{AUTO_RETRIES})")
+                result.pop("error")
+                result.update(at=(datetime.now() + timedelta(minutes=wait)).isoformat(timespec="minutes"),
+                              auto_retries=n + 1, last_error=err, retry_log=log)
+                print(f"scheduler: {x['profile_name']} {kind}({err[:40]}) → {did}。{wait}分後にやり直します({n + 1}/{recovery.RETRY_MAX[kind]})")
+            else:
+                result["error_kind"] = kind
+                tried = f"(自動再実行{n}回: " + " / ".join(log) + ")" if n else ""
+                failures.append(f"・{x['profile_name']} {x['at'][5:16].replace('T', ' ')} 「{x['text'][:25]}」\n  原因: {recovery.KIND_LABEL[kind]} — {err[:120]}{tried}")
         async with SCHED_LOCK:
             items = load_sched()
             for y in items:
@@ -146,6 +171,9 @@ async def run_due_posts() -> None:
             save_sched(items)
         if status == "done":
             shutil.rmtree(STATE_DIR / "_sched" / x["id"], ignore_errors=True)
+    if failures:
+        head = f"⚠️ 予約投稿を出せませんでした({len(failures)}件)。ボードの「予約履歴」で確認してください\n"
+        await recovery.notify(head + "\n".join(failures[:8]) + (f"\n…ほか{len(failures) - 8}件" if len(failures) > 8 else ""))
 
 
 async def recover_running() -> None:

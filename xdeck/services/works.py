@@ -7,9 +7,9 @@ from urllib.parse import urlparse
 
 import requests
 
-from ..config import ANY_URL_RE, POSTS_DIR, WORK_SITES, WORKS_DIR
+from ..config import ANY_URL_RE, FORTUNE, POSTS_DIR, WORK_SITES, WORKS_DIR
 from ..media import download
-from ..storage import write_json_atomic
+from ..storage import load_sched, write_json_atomic
 
 
 def find_work_urls(text: str) -> list[dict]:
@@ -133,6 +133,12 @@ def list_items():
             meta_w = json.loads(f.read_text(encoding="utf-8"))
             w["affiliate"] = meta_w.get("affiliate", "")
             w["weight"] = meta_w.get("weight", 1)
+            if meta_w.get("followup_text"):
+                w["followup_text"] = meta_w["followup_text"]
+            if meta_w.get("thread"):
+                w["thread"] = meta_w["thread"]  # 占い用: 本文が長いとき、続きを自分への返信で出す
+            if meta_w.get("planned_at"):
+                w["planned_at"] = meta_w["planned_at"]  # 占い用: 投稿予定の日時(予約前の計画)
         except Exception:  # noqa: BLE001
             pass
         w["latest"] = max(w["latest"], datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y%m%d_%H%M%S"))
@@ -143,6 +149,17 @@ def list_items():
         times = [p["saved_at"] for p in w["posts"]] + [u.get("added_at", "") for u in w["urls"]]
         times = [t for t in times if t]
         w["created_at"], w["updated_at"] = (min(times), max(times)) if times else ("", "")
+    if FORTUNE:  # 占い用: 予約・投稿の状況(予約済み/投稿済み/失敗)を作品ごとに付ける
+        by_work: dict[str, list[dict]] = {}
+        for x in load_sched():
+            by_work.setdefault(x["work_id"], []).append(x)
+        for w in works.values():
+            items = sorted(by_work.get(w["work_id"], []), key=lambda x: x["at"])
+            live = [x for x in items if x["status"] in ("pending", "running")]
+            pick = live[0] if live else (items[-1] if items else None)
+            if pick:
+                w["sched"] = {"status": pick["status"], "at": pick["at"], "id": pick["id"], "link": pick.get("link", "")}
+        return sorted(works.values(), key=lambda w: (w.get("sched") or {}).get("at") or w.get("planned_at") or "9")
     return sorted(works.values(), key=lambda w: w["updated_at"] or w["latest"], reverse=True)
 
 
@@ -163,3 +180,25 @@ def set_affiliate(wid: str, url: str) -> None:
     data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"urls": []}
     data.update(affiliate=url, affiliate_at=datetime.now().isoformat(timespec="seconds"))
     write_json_atomic(f, data)
+
+
+def work_thread(wid: str) -> list[str]:
+    """投稿の続き(自分のツイートへの返信として順に出す文章)。なければ空"""
+    f = WORKS_DIR / f"{wid}.json"
+    if not wid or "/" in wid or not f.exists():
+        return []
+    try:
+        return [t for t in json.loads(f.read_text(encoding="utf-8")).get("thread", []) if t]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def work_followup_text(wid: str) -> str:
+    """作品(占いでは、紹介する先生)ごとに決めた、1つ目のリプの本文。なければ空"""
+    f = WORKS_DIR / f"{wid}.json"
+    if not wid or "/" in wid or not f.exists():
+        return ""
+    try:
+        return json.loads(f.read_text(encoding="utf-8")).get("followup_text", "") or ""
+    except Exception:  # noqa: BLE001
+        return ""
