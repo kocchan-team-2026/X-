@@ -3,10 +3,12 @@ import asyncio
 
 import requests
 
+from . import browsers
 from .config import IMP_TARGET, XDECK_TOKEN, XDECK_URL
 
 
 def api(method: str, path: str, **kw) -> dict:
+    browsers.note_use(path, kw)  # 触れるアカウントを記録(使い終わったら browsers.sweep_loop が閉じる)
     r = requests.request(method, f"{XDECK_URL}/{path}", headers={"X-Api-Token": XDECK_TOKEN},
                          timeout=kw.pop("timeout", 30), **kw)
     r.raise_for_status()

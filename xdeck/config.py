@@ -85,11 +85,20 @@ FOLLOWUP_TEXT = os.environ.get("FOLLOWUP_TEXT", "続きです〜")              
 FOLLOWUP_TEXT_ENT = os.environ.get("FOLLOWUP_TEXT_ENT", "おすすめです〜")      # エンタメ用:1つ目のリプ本文
 FOLLOWUP_TEXT_URANAI = os.environ.get("FOLLOWUP_TEXT_URANAI", "続きです〜\n※広告を含みます【PR】")  # 占い用: 1つ目のリプ本文(この後ろにアフィリエイトリンク)
 RECOMMEND_N = int(os.environ.get("RECOMMEND_N", "3"))                      # おすすめとして貼るアダルト用投稿の数
-LIKE_TARGET = int(os.environ.get("LIKE_TARGET", "40"))  # このいいね数に達しても、インプ達成と同じく自動リプする(0で無効)
+LIKE_TARGET = int(os.environ.get("LIKE_TARGET", "0"))  # このいいね数に達したら自動リプする(0で無効。既定は止めている)
 LIKE_WINDOW_H = 48       # いいねを確認するのは、投稿からこの時間以内のもの
-LIKE_CHECK_MIN = 15      # いいねの確認間隔(分)
+LIKE_CHECK_MIN = int(os.environ.get("LIKE_CHECK_MIN", "120"))  # インプ(バックアップ)の確認間隔(分)。確認のたびにアカウントのブラウザを開くので長めに
 FOLLOWUP_WINDOW_H = 24   # 到達後これを過ぎたらリンク未登録でも諦める
 FOLLOWUP_MAX_TRIES = 3
+
+# ---- DM(返信の確認。アダルト用ボードのみ・読み取りだけ) ----
+DM_ON = os.environ.get("DM_REPLIES", "1") != "0"                           # 0 で DM 返信の確認を止める
+DM_GROUPS = tuple(g.strip() for g in os.environ.get("DM_GROUPS", "アダルト2").split(",") if g.strip())  # 対象グループ(全角の２も同じ扱い)
+DM_CHECK_MIN = int(os.environ.get("DM_CHECK_MIN", "5"))                    # 受信箱の確認間隔(分)
+DM_FIRST_ON = os.environ.get("DM_FIRST", "1") != "0"                       # 0 で、いいねした人への一通目の自動送信を止める
+DM_FIRST_MIN = int(os.environ.get("DM_FIRST_MIN", "3"))                   # 一通目を送る間隔(分)。1回に1人ずつ
+DM_FIRST_DAILY = int(os.environ.get("DM_FIRST_DAILY", "25"))               # 1アカウントが1日に送る一通目の上限(人数)
+DM_FIRST_WINDOW_H = int(os.environ.get("DM_FIRST_WINDOW_H", "48"))         # いいねが付いてからこの時間以内の投稿だけ対象
 
 # ---- 正規表現・作品サイト ----
 URL_RE = re.compile(r"https?://(?:www\.|mobile\.)?(?:x|twitter)\.com/(\w+)/status/(\d+)")

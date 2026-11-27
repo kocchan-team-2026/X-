@@ -4,6 +4,8 @@ from pathlib import Path
 
 import requests
 
+from . import platform_utils
+
 
 def video_duration(path: Path) -> float:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
@@ -43,9 +45,8 @@ def make_thumb(src: Path, dest: Path) -> None:
 
 
 def copy_file_to_clipboard(path: Path) -> None:
-    """Finder でコピーしたのと同じ状態にする。"""
-    subprocess.run(["osascript", "-e", "on run argv", "-e", "set the clipboard to (POSIX file (item 1 of argv))",
-                    "-e", "end run", str(path.resolve())], check=True)
+    """Finder / エクスプローラーでコピーしたのと同じ状態にする。"""
+    platform_utils.copy_file(path)
 
 
 def download(url: str, dest: Path) -> None:

@@ -3,6 +3,7 @@ import asyncio
 import subprocess
 import time
 
+from .. import platform_utils
 from ..api_client import api, stop_browser
 from ..config import BOARD_NAME, CHANNEL_IDS, ENT, FORTUNE, GALLERY_URL, NOTIFY_CHANNEL_ID
 from . import discord_link, status
@@ -45,7 +46,7 @@ def _ensure_xdeck() -> str:
         return "Xdeck は起動中"
     except Exception:  # noqa: BLE001
         pass
-    subprocess.run(["open", "-a", "XDeck"], check=False, capture_output=True)
+    platform_utils.launch_xdeck()
     for _ in range(20):
         time.sleep(3)
         try:
@@ -92,10 +93,8 @@ _PENDING: list[str] = []  # 送れなかった通知(Discord がつながった�
 
 
 def _mac_notify(text: str) -> None:
-    """Discord に送れないときの代わりに、Mac の通知を出す"""
-    msg = text.replace("\\", " ").replace('"', "'").replace("\n", " ")[:180]
-    subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "{BOARD_NAME}ボード"'],
-                   check=False, capture_output=True)
+    """Discord に送れないときの代わりに、デスクトップ通知を出す(macOS / Windows)"""
+    platform_utils.desktop_notify(f"{BOARD_NAME}ボード", text)
 
 
 async def _send(text: str) -> bool:

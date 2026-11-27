@@ -96,3 +96,27 @@ async def api_sb_status(req):
     if not st:
         raise web.HTTPNotFound()
     return web.json_response(st)
+
+
+@routes.get("/api/dm/replies")
+async def api_dm_replies(_):
+    """DM の新しい返信(新しい順)。DM 返信の確認が対象にしているアカウントだけ"""
+    from ..services.dm import recent_replies
+    return web.json_response({"replies": await asyncio.to_thread(recent_replies)})
+
+
+@routes.get("/api/dm/settings")
+async def api_dm_settings(_):
+    """「アダルト2」画面用: 一通目の自動送信・返信確認の ON/OFF、本日の送信数、対象アカウント、最近の返信"""
+    from ..config import DM_CHECK_MIN, DM_FIRST_MIN
+    from ..services import dm
+    prof = await asyncio.to_thread(dm.dm_profiles)
+    return web.json_response({**dm.get_settings(), "today": dm.sent_today(), "first_min": DM_FIRST_MIN, "check_min": DM_CHECK_MIN,
+                              "accounts": [p["name"] for p in prof], "replies": await asyncio.to_thread(dm.recent_replies, 20)})
+
+
+@routes.post("/api/dm/settings")
+async def api_dm_settings_set(req):
+    from ..services import dm
+    b = await req.json()
+    return web.json_response(dm.set_settings(**{k: b[k] for k in ("first_on", "reply_on") if k in b}))

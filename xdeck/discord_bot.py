@@ -4,9 +4,11 @@ from datetime import timedelta
 
 import discord
 
-from .config import (CHANNEL_IDS, ENT, ENT_CHANNELS, FOLLOWUP_ON, GALLERY_URL, POSTS_DIR, STATE_DIR,
+from .config import (CHANNEL_IDS, DM_FIRST_ON, DM_ON, ENT, ENT_CHANNELS, FORTUNE, FOLLOWUP_ON, GALLERY_URL, POSTS_DIR, STATE_DIR,
                      URL_RE)
+from . import browsers
 from .services import discord_link, recovery, status
+from .services.dm import dm_first_loop, dm_loop
 from .services.followups import followup_loop
 from .services.routine import routine_loop
 from .services.scheduler import scheduler_loop
@@ -24,11 +26,16 @@ class Bot(discord.Client):
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         status.set_client(self)
         await start_web()
+        self.browser_task = asyncio.create_task(browsers.sweep_loop())  # 使い終わったアカウントのブラウザを閉じる
         self.sched_task = asyncio.create_task(scheduler_loop())
         self.watchdog_task = asyncio.create_task(recovery.watchdog_loop())
         self.routine_task = asyncio.create_task(routine_loop())
         if FOLLOWUP_ON:
             self.followup_task = asyncio.create_task(followup_loop())
+        if DM_ON and not (ENT or FORTUNE):  # DM 返信の確認はアダルト用ボードだけ
+            self.dm_task = asyncio.create_task(dm_loop())
+        if DM_FIRST_ON and not (ENT or FORTUNE):  # 一通目の自動送信(アダルト2グループだけ・1日の上限あり)
+            self.dm_first_task = asyncio.create_task(dm_first_loop())
 
 
 client = Bot(intents=intents)

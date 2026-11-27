@@ -97,7 +97,7 @@ async def liked_enough(st: dict, mine: dict[str, dict]) -> list[dict]:
     since = (datetime.now() - timedelta(hours=LIKE_WINDOW_H)).isoformat(timespec="seconds")
     cands = {t: m for t, m in mine.items()
              if m["at"] >= since and (st.get(t) or {}).get("state") not in ("baseline", "done", "gave_up")}
-    sem = asyncio.Semaphore(4)
+    sem = asyncio.Semaphore(2)  # 同時に開くアカウントを増やさない(メモリ節約)
     hit: list[dict] = []
 
     async def one(tid: str, m: dict) -> None:

@@ -10,6 +10,7 @@ import os
 
 from aiohttp import web
 
+from .. import platform_utils
 from ..config import ENT, FORTUNE, POSTS_DIR, STATE_DIR, WORKS_DIR
 from ..media import copy_file_to_clipboard, edit_video, make_thumb
 from ..rewrite import rewrite_text
@@ -41,8 +42,7 @@ async def copy_file(req):
 async def copy_text(req):
     p = safe_path(req.match_info["id"], "tweet.json")
     text = json.loads(p.read_text(encoding="utf-8"))["text"]
-    await asyncio.to_thread(
-        lambda: subprocess.run(["pbcopy"], input=text.encode(), check=True))
+    await asyncio.to_thread(platform_utils.copy_text, text)
     return web.Response(text="ok")
 
 
@@ -53,7 +53,7 @@ async def copy_url(req):
     f = WORKS_DIR / f"{wid}.json"
     if "/" in wid or not f.exists() or url not in {x["url"] for x in json.loads(f.read_text(encoding="utf-8"))["urls"]}:
         raise web.HTTPNotFound()
-    await asyncio.to_thread(lambda: subprocess.run(["pbcopy"], input=url.encode(), check=True))
+    await asyncio.to_thread(platform_utils.copy_text, url)
     return web.Response(text="ok")
 
 

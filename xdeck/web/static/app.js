@@ -606,6 +606,36 @@ async function runImp(){
 }
 $('#impbtn').onclick=openImp;
 $('#imppanel').addEventListener('click',e=>{if(e.target.id==='imppanel')closeImp();});
+/* ===== アダルト2(DM): 一通目の自動送信・返信確認の ON/OFF ===== */
+let DM=null;
+async function openDm(){
+  $('#dmpanel').hidden=false;DM={d:null};drawDm();
+  try{DM.d=await api('/api/dm/settings');}catch(e){toast('設定を取得できません: '+e.message,true);}
+  if(DM)drawDm();
+}
+function closeDm(){DM=null;$('#dmpanel').hidden=true;$('#dmpanel').innerHTML='';}
+function dmSwitch(id,on,label,sub){
+  return `<div class="field"><div class="row" style="justify-content:space-between;align-items:center;gap:12px"><div><div class="l" style="margin:0">${label}</div><div class="note" style="margin:2px 0 0">${sub}</div></div>
+    <button class="btn ${on?'primary':''}" id="${id}" role="switch" aria-checked="${on}" style="min-width:76px">${on?'ON':'OFF'}</button></div></div>`;
+}
+function drawDm(){
+  const pn=$('#dmpanel'),B=DM;if(!B)return;const d=B.d;
+  pn.innerHTML=`<div class="sheet"><header><h2>アダルト2(DM)</h2><button class="iconbtn" id="dmclose" aria-label="閉じる">✕</button></header><div class="content">
+    ${!d?'<div class="note">読み込み中…</div>':`
+    <div class="note" style="margin-top:0">対象アカウント: ${d.accounts.length?d.accounts.map(esc).join('、'):'なし'}</div>
+    ${dmSwitch('dmfirst',d.first_on,'一通目の自動送信',`いいねしてくれた人に、${d.first_min}分おきに1人ずつ送ります。1日の上限 ${d.today.limit}人(本日 ${d.today.count}人送信済み)`)}
+    ${dmSwitch('dmreply',d.reply_on,'返信の確認・通知',`${d.check_min}分おきに受信箱を読み、返信が来たら Discord に通知します(読み取りのみ)`)}
+    <div class="note">二通目以降(年齢確認など)は自動では送れません。返信が来たら手動で送ってください。</div>
+    <div class="field"><div class="l">最近の返信</div>${d.replies.length?d.replies.map(r=>`<div class="note" style="margin:4px 0"><b>@${esc(r.screen_name||r.user_id)}</b> ${esc(r.at.slice(5,16).replace('T',' '))}<br>${esc(r.text.slice(0,200))}</div>`).join(''):'<div class="note">まだありません</div>'}</div>`}
+    </div></div>`;
+  $('#dmclose').onclick=closeDm;
+  const tog=(id,key)=>{const b=$('#'+id);if(b)b.onclick=async()=>{
+    try{const r=await api('/api/dm/settings',{method:'POST',body:JSON.stringify({[key]:!B.d[key]})});Object.assign(B.d,r);drawDm();toast((key==='first_on'?'一通目の自動送信':'返信の確認')+'を'+(r[key]?'ON':'OFF')+'にしました');}
+    catch(e){toast('変更に失敗: '+e.message,true);}};};
+  tog('dmfirst','first_on');tog('dmreply','reply_on');
+}
+if(!IS_ENT&&!IS_FORTUNE){$('#dmbtn').hidden=false;$('#dmgrp').hidden=false;$('#dmbtn').onclick=openDm;
+  $('#dmpanel').addEventListener('click',e=>{if(e.target.id==='dmpanel')closeDm();});}
 /* ===== シャドウバン判定 ===== */
 let SB=null;
 async function openSb(){
